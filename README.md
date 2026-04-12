@@ -58,6 +58,9 @@ baccy/
 │   └── baccy-app/          # Application logic
 └── public/                 # Static assets
 ```
+## AI Used? 
+
+Yes.
 
 ## License
 
