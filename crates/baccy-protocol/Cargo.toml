@@ -1,0 +1,10 @@
+[package]
+name = "baccy-protocol"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+baccy-core = { path = "../baccy-core" }
+baccy-transport = { path = "../baccy-transport" }
+bacnet-rs = { workspace = true }
+thiserror = { workspace = true }

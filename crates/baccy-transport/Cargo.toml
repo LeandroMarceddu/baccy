@@ -1,0 +1,10 @@
+[package]
+name = "baccy-transport"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+baccy-core = { path = "../baccy-core" }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

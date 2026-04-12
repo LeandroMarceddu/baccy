@@ -1,0 +1,50 @@
+[workspace]
+members = [
+    "crates/baccy-core",
+    "crates/baccy-transport",
+    "crates/baccy-protocol",
+    "crates/baccy-app",
+    "src-tauri",
+]
+resolver = "2"
+
+[workspace.dependencies]
+# BACnet protocol implementation
+bacnet-rs = "0.2.2"
+
+# GUI framework
+egui = "0.34"
+eframe = "0.34"
+
+# Async runtime
+tokio = { version = "1.51", features = ["net", "time", "rt-multi-thread"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+toml = "1.1.2+spec-1.1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time"] }
+tracing-appender = "0.2"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Platform-specific directories
+dirs = "6.0.0"
+
+# Development dependencies
+proptest = "1.11"
+mockall = "0.14"
+tempfile = "3.27"
+hex = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+

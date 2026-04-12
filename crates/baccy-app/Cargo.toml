@@ -1,0 +1,16 @@
+[package]
+name = "baccy-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+baccy-core = { path = "../baccy-core" }
+baccy-protocol = { path = "../baccy-protocol" }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+baccy-transport = { path = "../baccy-transport" }
+proptest = { workspace = true }
+tracing-subscriber = { workspace = true }
