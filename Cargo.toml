@@ -10,11 +10,10 @@ resolver = "2"
 
 [workspace.dependencies]
 # BACnet protocol implementation
-bacnet-rs = "0.2.2"
+bacnet-rs = "0.3"
 
-# GUI framework
-egui = "0.34"
-eframe = "0.34"
+# Serial port communication for MS/TP
+serialport = "4.2"
 
 # Async runtime
 tokio = { version = "1.51", features = ["net", "time", "rt-multi-thread"] }

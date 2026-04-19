@@ -13,10 +13,15 @@ use std::time::Duration;
 // Re-export bacnet-rs for direct usage
 pub use bacnet_rs;
 
+// Import service choice enums from bacnet-rs
+use bacnet_rs::service::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
+use bacnet_rs::object::property_identifier::PropertyIdentifier;
+
 /// Type conversion utilities for mapping between baccy-core and bacnet-rs types
 pub mod type_conversion {
     use baccy_core::{ObjectType, PropertyId, PropertyValue};
     use bacnet_rs::object::ObjectType as BacnetObjectType;
+    use bacnet_rs::object::property_identifier::PropertyIdentifier;
 
     /// Convert baccy-core ObjectType to bacnet-rs ObjectType
     pub fn to_bacnet_object_type(obj_type: ObjectType) -> BacnetObjectType {
@@ -51,18 +56,18 @@ pub mod type_conversion {
         }
     }
 
-    /// Convert baccy-core PropertyId to bacnet-rs property identifier (u32)
-    pub fn to_bacnet_property_id(prop_id: PropertyId) -> u32 {
+    /// Convert baccy-core PropertyId to bacnet-rs PropertyIdentifier enum
+    pub fn to_bacnet_property_id(prop_id: PropertyId) -> PropertyIdentifier {
         match prop_id {
-            PropertyId::PresentValue => 85,  // PRESENT_VALUE
-            PropertyId::ObjectName => 77,     // OBJECT_NAME
-            PropertyId::Description => 28,    // DESCRIPTION
-            PropertyId::Units => 117,         // UNITS
-            PropertyId::StatusFlags => 111,   // STATUS_FLAGS
-            PropertyId::OutOfService => 81,   // OUT_OF_SERVICE
-            PropertyId::Reliability => 103,   // RELIABILITY
-            PropertyId::EventState => 36,     // EVENT_STATE
-            PropertyId::Priority => 87,       // PRIORITY
+            PropertyId::PresentValue => PropertyIdentifier::PresentValue,
+            PropertyId::ObjectName => PropertyIdentifier::ObjectName,
+            PropertyId::Description => PropertyIdentifier::Description,
+            PropertyId::Units => PropertyIdentifier::Units,
+            PropertyId::StatusFlags => PropertyIdentifier::StatusFlags,
+            PropertyId::OutOfService => PropertyIdentifier::OutOfService,
+            PropertyId::Reliability => PropertyIdentifier::Reliability,
+            PropertyId::EventState => PropertyIdentifier::EventState,
+            PropertyId::Priority => PropertyIdentifier::Priority,
         }
     }
 
@@ -71,25 +76,35 @@ pub mod type_conversion {
         use bacnet_rs::encoding::advanced::bitstring::encode_bit_string;
         use bacnet_rs::encoding::{
             encode_boolean, encode_character_string, encode_enumerated, encode_real, encode_signed,
-            encode_unsigned,
+            encode_unsigned, encode_object_identifier,
         };
 
         let mut buffer = Vec::new();
         match value {
             PropertyValue::Real(f) => encode_real(&mut buffer, f)
                 .map_err(|e| format!("Failed to encode Real: {}", e))?,
-            PropertyValue::Integer(i) => encode_signed(&mut buffer, i)
+            PropertyValue::Integer(i) => encode_signed(&mut buffer, i as i32)
                 .map_err(|e| format!("Failed to encode Integer: {}", e))?,
-            PropertyValue::Unsigned(u) => encode_unsigned(&mut buffer, u)
+            PropertyValue::Unsigned(u) => encode_unsigned(&mut buffer, u as u32)
                 .map_err(|e| format!("Failed to encode Unsigned: {}", e))?,
             PropertyValue::Boolean(b) => encode_boolean(&mut buffer, b)
                 .map_err(|e| format!("Failed to encode Boolean: {}", e))?,
             PropertyValue::String(s) => encode_character_string(&mut buffer, &s)
                 .map_err(|e| format!("Failed to encode String: {}", e))?,
-            PropertyValue::Enumerated(e) => encode_enumerated(&mut buffer, e)
-                .map_err(|e| format!("Failed to encode Enumerated: {}", e))?,
+            PropertyValue::Enumerated(e) => {
+                // encode_enumerated is now infallible in bacnet-rs 0.3
+                encode_enumerated(&mut buffer, e);
+            },
             PropertyValue::BitString(bits) => encode_bit_string(&mut buffer, &bits)
                 .map_err(|e| format!("Failed to encode BitString: {}", e))?,
+            PropertyValue::ObjectIdentifier { object_type, instance } => {
+                let bacnet_obj_id = bacnet_rs::object::ObjectIdentifier::new(
+                    to_bacnet_object_type(object_type),
+                    instance
+                );
+                encode_object_identifier(&mut buffer, bacnet_obj_id)
+                    .map_err(|e| format!("Failed to encode ObjectIdentifier: {}", e))?;
+            },
         }
         Ok(buffer)
     }
@@ -99,7 +114,7 @@ pub mod type_conversion {
         use bacnet_rs::encoding::advanced::bitstring::decode_bit_string;
         use bacnet_rs::encoding::{
             decode_boolean, decode_character_string, decode_enumerated, decode_real, decode_signed,
-            decode_unsigned,
+            decode_unsigned, decode_object_identifier,
         };
 
         if data.is_empty() {
@@ -116,12 +131,12 @@ pub mod type_conversion {
             2 => {
                 let (value, _) = decode_unsigned(data)
                     .map_err(|e| format!("Failed to decode Unsigned: {}", e))?;
-                Ok(PropertyValue::Unsigned(value))
+                Ok(PropertyValue::Unsigned(value as u64))
             }
             3 => {
                 let (value, _) =
                     decode_signed(data).map_err(|e| format!("Failed to decode Integer: {}", e))?;
-                Ok(PropertyValue::Integer(value))
+                Ok(PropertyValue::Integer(value as i64))
             }
             4 => {
                 let (value, _) =
@@ -143,7 +158,62 @@ pub mod type_conversion {
                     .map_err(|e| format!("Failed to decode Enumerated: {}", e))?;
                 Ok(PropertyValue::Enumerated(value))
             }
+            12 => {
+                let (obj_id, _) = decode_object_identifier(data)
+                    .map_err(|e| format!("Failed to decode ObjectIdentifier: {}", e))?;
+                let object_type = from_bacnet_object_type(obj_id.object_type)
+                    .ok_or_else(|| format!("Unsupported object type: {:?}", obj_id.object_type))?;
+                Ok(PropertyValue::ObjectIdentifier {
+                    object_type,
+                    instance: obj_id.instance,
+                })
+            }
             _ => Err(format!("Unsupported application tag: {}", tag_number)),
+        }
+    }
+
+    /// Convert bacnet-rs PropertyValue to baccy-core PropertyValue
+    pub fn convert_bacnet_property_value(
+        value: &bacnet_rs::property::PropertyValue,
+    ) -> Result<PropertyValue, String> {
+        use bacnet_rs::property::PropertyValue as BacnetPropertyValue;
+
+        match value {
+            BacnetPropertyValue::Null => {
+                Err("Null property values are not supported".to_string())
+            }
+            BacnetPropertyValue::Boolean(b) => Ok(PropertyValue::Boolean(*b)),
+            BacnetPropertyValue::Unsigned(u) => Ok(PropertyValue::Unsigned(*u)),
+            BacnetPropertyValue::Signed(i) => Ok(PropertyValue::Integer(*i)),
+            BacnetPropertyValue::Real(f) => Ok(PropertyValue::Real(*f)),
+            BacnetPropertyValue::Double(d) => Ok(PropertyValue::Real(*d as f32)),
+            BacnetPropertyValue::OctetString(bytes) => {
+                // Convert octet string to hex string representation
+                let hex_string = bytes.iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>();
+                Ok(PropertyValue::String(hex_string))
+            }
+            BacnetPropertyValue::CharacterString(s) => Ok(PropertyValue::String(s.clone())),
+            BacnetPropertyValue::BitString(bits) => Ok(PropertyValue::BitString(bits.clone())),
+            BacnetPropertyValue::Enumerated(e) => Ok(PropertyValue::Enumerated(*e)),
+            BacnetPropertyValue::Date(_, _, _, _) => {
+                Err("Date property values are not yet supported".to_string())
+            }
+            BacnetPropertyValue::Time(_, _, _, _) => {
+                Err("Time property values are not yet supported".to_string())
+            }
+            BacnetPropertyValue::ObjectIdentifier(obj_id) => {
+                let object_type = from_bacnet_object_type(obj_id.object_type)
+                    .ok_or_else(|| format!("Unsupported object type: {:?}", obj_id.object_type))?;
+                Ok(PropertyValue::ObjectIdentifier {
+                    object_type,
+                    instance: obj_id.instance,
+                })
+            }
+            BacnetPropertyValue::Unknown(_) => {
+                Err("Unknown property value type is not supported".to_string())
+            }
         }
     }
 }
@@ -245,6 +315,16 @@ impl ErrorCode {
     }
 }
 
+/// Format an ObjectId for error messages
+fn format_object_id(object: &ObjectId) -> String {
+    format!("{:?}({})", object.object_type, object.instance)
+}
+
+/// Format a PropertyId for error messages
+fn format_property_id(property: &PropertyId) -> String {
+    format!("{:?}", property)
+}
+
 /// Parse an I-Am message
 pub fn parse_iam(data: &[u8], _source_address: Address) -> Result<Device, ProtocolError> {
     use bacnet_rs::network::Npdu;
@@ -336,7 +416,7 @@ impl BacnetService {
             .map_err(|e| ProtocolError::EncodingError(format!("Failed to encode Who-Is: {}", e)))?;
 
         let apdu = Apdu::UnconfirmedRequest {
-            service_choice: 0x08, // WhoIs service choice
+            service_choice: UnconfirmedServiceChoice::WhoIs,
             service_data,
         };
 
@@ -368,7 +448,7 @@ impl BacnetService {
         })?;
 
         let apdu = Apdu::UnconfirmedRequest {
-            service_choice: 0x08, // WhoIs service choice
+            service_choice: UnconfirmedServiceChoice::WhoIs,
             service_data,
         };
 
@@ -406,7 +486,7 @@ impl BacnetService {
         use bacnet_rs::network::Npdu;
         use bacnet_rs::object::ObjectIdentifier;
         use bacnet_rs::service::ReadPropertyRequest;
-        use type_conversion::{from_bacnet_value, to_bacnet_object_type, to_bacnet_property_id};
+        use type_conversion::{convert_bacnet_property_value, to_bacnet_object_type, to_bacnet_property_id};
 
         let address = self.get_device_address(device)?;
 
@@ -430,7 +510,7 @@ impl BacnetService {
             invoke_id: 1,
             sequence_number: None,
             proposed_window_size: None,
-            service_choice: 0x0C, // ReadProperty service choice
+            service_choice: ConfirmedServiceChoice::ReadProperty,
             service_data,
         };
 
@@ -479,58 +559,59 @@ impl BacnetService {
 
             match apdu {
                 Apdu::ComplexAck {
+                    service_choice,
                     service_data,
                     ..
                 } => {
-                    // Manual parsing to handle edge cases that ReadPropertyResponse::decode() misses
-                    let mut pos = 0;
-                    
-                    // Skip object identifier (context tag 0)
-                    if pos >= service_data.len() || service_data[pos] != 0x0C {
-                        return Err(ProtocolError::DecodingError("Expected object identifier".to_string()));
-                    }
-                    pos += 5; // 0x0C + 4 bytes of object ID
-                    
-                    // Skip property identifier (context tag 1)
-                    if pos >= service_data.len() || service_data[pos] != 0x19 {
-                        return Err(ProtocolError::DecodingError("Expected property identifier".to_string()));
-                    }
-                    pos += 2; // 0x19 + 1 byte property ID
-                    
-                    // Skip array index if present (context tag 2)
-                    if pos < service_data.len() && service_data[pos] == 0x29 {
-                        pos += 2; // 0x29 + 1 byte array index
+                    // Verify this is a ReadProperty response
+                    if service_choice != ConfirmedServiceChoice::ReadProperty {
+                        continue;
                     }
                     
-                    // Property value opening tag (context tag 3)
-                    if pos >= service_data.len() || service_data[pos] != 0x3E {
-                        return Err(ProtocolError::DecodingError("Expected property value opening tag".to_string()));
-                    }
-                    pos += 1;
+                    // Use ReadPropertyResponse::decode() to parse the response
+                    use bacnet_rs::service::ReadPropertyResponse;
                     
-                    // Find closing tag (0x3F)
-                    let value_start = pos;
-                    let mut value_end = pos;
-                    while value_end < service_data.len() && service_data[value_end] != 0x3F {
-                        value_end += 1;
+                    let response = ReadPropertyResponse::decode(&service_data).map_err(|e| {
+                        ProtocolError::DecodingError(format!(
+                            "Failed to parse property read response for {} property {} from device {}: {}. \
+                            The device may have returned malformed data or an unsupported encoding.",
+                            format_object_id(&object), format_property_id(&property), device, e
+                        ))
+                    })?;
+                    
+                    // Extract the first property value from the response
+                    // In bacnet-rs 0.3, property_values is Vec<PropertyValue>
+                    if response.property_values.is_empty() {
+                        return Err(ProtocolError::DecodingError(format!(
+                            "Property read returned no values for {} property {} from device {}. \
+                            The property may not be implemented or the device returned an empty response.",
+                            format_object_id(&object), format_property_id(&property), device
+                        )));
                     }
                     
-                    if value_end >= service_data.len() {
-                        return Err(ProtocolError::DecodingError("Missing property value closing tag".to_string()));
-                    }
-                    
-                    let property_value_bytes = &service_data[value_start..value_end];
-                    let property_value = from_bacnet_value(property_value_bytes).map_err(|e| {
-                        ProtocolError::DecodingError(format!("Failed to convert value: {}", e))
+                    // Convert bacnet-rs PropertyValue to baccy-core PropertyValue
+                    let bacnet_value = &response.property_values[0];
+                    let property_value = convert_bacnet_property_value(bacnet_value).map_err(|e| {
+                        ProtocolError::DecodingError(format!(
+                            "Failed to convert property value for {} property {} from device {}: {}. \
+                            The property type may not be supported or the value is invalid.",
+                            format_object_id(&object), format_property_id(&property), device, e
+                        ))
                     })?;
 
                     return Ok(property_value);
                 }
                 Apdu::Error {
+                    service_choice,
                     error_class,
                     error_code,
                     ..
                 } => {
+                    // Verify this is a ReadProperty error
+                    if service_choice != ConfirmedServiceChoice::ReadProperty {
+                        continue;
+                    }
+                    
                     return Err(ProtocolError::BacnetError {
                         class: match error_class {
                             1 => ErrorClass::Object,
@@ -543,6 +624,15 @@ impl BacnetService {
                             _ => ErrorCode::Unknown(error_code as u8),
                         },
                     });
+                }
+                Apdu::Reject {
+                    reject_reason,
+                    ..
+                } => {
+                    return Err(ProtocolError::DecodingError(format!(
+                        "Request rejected by device {}: {:?}",
+                        device, reject_reason
+                    )));
                 }
                 _ => continue,
             }
@@ -587,7 +677,7 @@ impl BacnetService {
             .map_err(|e| ProtocolError::EncodingError(format!("Failed to encode value: {}", e)))?;
 
         let write_request =
-            WritePropertyRequest::new(bacnet_object_id, bacnet_property_id, property_value_bytes);
+            WritePropertyRequest::new(bacnet_object_id, bacnet_property_id.into(), property_value_bytes);
 
         let mut service_data = Vec::new();
         write_request.encode(&mut service_data).map_err(|e| {
@@ -603,7 +693,7 @@ impl BacnetService {
             invoke_id: 1,
             sequence_number: None,
             proposed_window_size: None,
-            service_choice: 0x0F, // WriteProperty service choice
+            service_choice: ConfirmedServiceChoice::WriteProperty,
             service_data,
         };
 
@@ -636,15 +726,66 @@ impl BacnetService {
                 continue;
             }
 
-            // Check for SimpleAck (0x2) or Error (0x5)
-            let pdu_type = (response_bytes[0] >> 4) & 0x0F;
-            if pdu_type == 0x2 {
-                return Ok(());
-            } else if pdu_type == 0x5 {
-                return Err(ProtocolError::BacnetError {
-                    class: ErrorClass::Unknown(0),
-                    code: ErrorCode::WriteAccessDenied,
-                });
+            // Decode NPDU and APDU for proper response handling
+            let mut offset = 0;
+            if response_bytes.len() >= 4 && response_bytes[0] == 0x81 {
+                offset = 4;
+            }
+
+            if response_bytes.len() <= offset {
+                continue;
+            }
+
+            let (_, npdu_len) = Npdu::decode(&response_bytes[offset..]).map_err(|e| {
+                ProtocolError::DecodingError(format!("Failed to decode NPDU: {}", e))
+            })?;
+            offset += npdu_len;
+
+            let apdu = Apdu::decode(&response_bytes[offset..]).map_err(|e| {
+                ProtocolError::DecodingError(format!("Failed to decode APDU: {}", e))
+            })?;
+
+            match apdu {
+                Apdu::SimpleAck { service_choice, .. } => {
+                    // Verify this is a WriteProperty acknowledgment
+                    if service_choice == ConfirmedServiceChoice::WriteProperty as u8 {
+                        return Ok(());
+                    }
+                }
+                Apdu::Error {
+                    service_choice,
+                    error_class,
+                    error_code,
+                    ..
+                } => {
+                    // Verify this is a WriteProperty error
+                    if service_choice != ConfirmedServiceChoice::WriteProperty {
+                        continue;
+                    }
+                    
+                    return Err(ProtocolError::BacnetError {
+                        class: match error_class {
+                            0 => ErrorClass::Device,
+                            1 => ErrorClass::Object,
+                            2 => ErrorClass::Property,
+                            _ => ErrorClass::Unknown(error_class as u8),
+                        },
+                        code: match error_code {
+                            40 => ErrorCode::WriteAccessDenied,
+                            _ => ErrorCode::Unknown(error_code as u8),
+                        },
+                    });
+                }
+                Apdu::Reject {
+                    reject_reason,
+                    ..
+                } => {
+                    return Err(ProtocolError::DecodingError(format!(
+                        "WriteProperty request rejected by device {}: {:?}",
+                        device, reject_reason
+                    )));
+                }
+                _ => continue,
             }
         }
     }
@@ -693,7 +834,7 @@ impl BacnetService {
         let device_object = BacnetObjectId::new(BacnetObjectType::Device, device);
 
         // Create property reference for Object_List (property ID 76)
-        let property_ref = PropertyReference::new(76);
+        let property_ref = PropertyReference::new(PropertyIdentifier::ObjectList);
 
         // Create read access specification
         let read_spec = ReadAccessSpecification::new(device_object, vec![property_ref]);
@@ -705,11 +846,8 @@ impl BacnetService {
         let mut service_data = Vec::new();
         for spec in &rpm_request.read_access_specifications {
             // Object identifier - context tag 0
-            // Manually encode: (object_type << 22) | instance
-            let obj_type_num = match spec.object_identifier.object_type {
-                BacnetObjectType::Device => 8,
-                _ => 0,
-            };
+            // Use ObjectType enum and convert to u32 for encoding
+            let obj_type_num: u32 = spec.object_identifier.object_type.into();
             let object_id: u32 = (obj_type_num << 22) | spec.object_identifier.instance;
             service_data.push(0x0C);
             service_data.extend_from_slice(&object_id.to_be_bytes());
@@ -718,7 +856,9 @@ impl BacnetService {
             service_data.push(0x1E);
             for prop_ref in &spec.property_references {
                 service_data.push(0x09);
-                service_data.push(prop_ref.property_identifier as u8);
+                // Convert PropertyIdentifier to u32 for encoding
+                let prop_id_value: u32 = prop_ref.property_identifier.into();
+                service_data.push(prop_id_value as u8);
 
                 if let Some(array_index) = prop_ref.property_array_index {
                     service_data.push(0x19);
@@ -740,7 +880,7 @@ impl BacnetService {
             invoke_id: 1,
             sequence_number: None,
             proposed_window_size: None,
-            service_choice: 0x0E, // ReadPropertyMultiple service choice
+            service_choice: ConfirmedServiceChoice::ReadPropertyMultiple,
             service_data,
         };
 
@@ -806,10 +946,16 @@ impl BacnetService {
             match response_apdu {
                 Apdu::ComplexAck {
                     invoke_id,
+                    service_choice,
                     service_data,
                     ..
                 } => {
                     if invoke_id != 1 {
+                        continue;
+                    }
+                    
+                    // Verify this is a ReadPropertyMultiple response
+                    if service_choice != ConfirmedServiceChoice::ReadPropertyMultiple {
                         continue;
                     }
 
@@ -829,35 +975,16 @@ impl BacnetService {
                             ];
                             let obj_id_raw = u32::from_be_bytes(obj_id_bytes);
 
-                            // Manually decode: object_type = upper 10 bits, instance = lower 22 bits
-                            let obj_type_num = (obj_id_raw >> 22) & 0x3FF;
-                            let instance = obj_id_raw & 0x3FFFFF;
-
-                            // Convert object type number to BacnetObjectType
-                            let bacnet_obj_type = match obj_type_num {
-                                0 => BacnetObjectType::AnalogInput,
-                                1 => BacnetObjectType::AnalogOutput,
-                                2 => BacnetObjectType::AnalogValue,
-                                3 => BacnetObjectType::BinaryInput,
-                                4 => BacnetObjectType::BinaryOutput,
-                                5 => BacnetObjectType::BinaryValue,
-                                8 => BacnetObjectType::Device,
-                                13 => BacnetObjectType::MultiStateInput,
-                                14 => BacnetObjectType::MultiStateOutput,
-                                19 => BacnetObjectType::MultiStateValue,
-                                _ => {
-                                    pos += 4;
-                                    continue;
-                                }
-                            };
-
-                            // Convert to our ObjectId type
+                            // Decode using ObjectIdentifier's From<u32> implementation
+                            let bacnet_obj_id: BacnetObjectId = obj_id_raw.into();
+                            
+                            // Convert bacnet-rs ObjectType to baccy-core ObjectType
                             if let Some(obj_type) =
-                                type_conversion::from_bacnet_object_type(bacnet_obj_type)
+                                type_conversion::from_bacnet_object_type(bacnet_obj_id.object_type)
                             {
                                 let object_id = ObjectId {
                                     object_type: obj_type,
-                                    instance,
+                                    instance: bacnet_obj_id.instance,
                                 };
                                 objects.push(object_id);
                             }
@@ -870,16 +997,540 @@ impl BacnetService {
 
                     return Ok(objects);
                 }
-                Apdu::Error { .. } => {
+                Apdu::Error {
+                    service_choice,
+                    error_class,
+                    error_code,
+                    ..
+                } => {
+                    // Verify this is a ReadPropertyMultiple error
+                    if service_choice != ConfirmedServiceChoice::ReadPropertyMultiple {
+                        continue;
+                    }
+                    
                     return Err(ProtocolError::BacnetError {
-                        class: ErrorClass::Device,
-                        code: ErrorCode::UnknownObject,
+                        class: match error_class {
+                            0 => ErrorClass::Device,
+                            1 => ErrorClass::Object,
+                            2 => ErrorClass::Property,
+                            _ => ErrorClass::Unknown(error_class as u8),
+                        },
+                        code: match error_code {
+                            31 => ErrorCode::UnknownObject,
+                            32 => ErrorCode::UnknownProperty,
+                            _ => ErrorCode::Unknown(error_code as u8),
+                        },
                     });
+                }
+                Apdu::Reject {
+                    reject_reason,
+                    ..
+                } => {
+                    return Err(ProtocolError::DecodingError(format!(
+                        "ReadPropertyMultiple request rejected by device {}: {:?}",
+                        device, reject_reason
+                    )));
                 }
                 _ => {
                     continue;
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bacnet_rs::property::PropertyValue as BacnetPropertyValue;
+    use bacnet_rs::object::{ObjectIdentifier, ObjectType as BacnetObjectType};
+    use bacnet_rs::object::property_identifier::PropertyIdentifier;
+    use bacnet_rs::service::ReadPropertyResponse;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    #[test]
+    fn test_convert_bacnet_property_value_unsigned() {
+        let bacnet_value = BacnetPropertyValue::Unsigned(42);
+        let result = type_conversion::convert_bacnet_property_value(&bacnet_value);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            PropertyValue::Unsigned(v) => assert_eq!(v, 42),
+            _ => panic!("Expected Unsigned value"),
+        }
+    }
+
+    #[test]
+    fn test_convert_bacnet_property_value_signed() {
+        let bacnet_value = BacnetPropertyValue::Signed(-42);
+        let result = type_conversion::convert_bacnet_property_value(&bacnet_value);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            PropertyValue::Integer(v) => assert_eq!(v, -42),
+            _ => panic!("Expected Integer value"),
+        }
+    }
+
+    #[test]
+    fn test_convert_bacnet_property_value_real() {
+        let bacnet_value = BacnetPropertyValue::Real(3.14);
+        let result = type_conversion::convert_bacnet_property_value(&bacnet_value);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            PropertyValue::Real(v) => assert!((v - 3.14).abs() < 0.001),
+            _ => panic!("Expected Real value"),
+        }
+    }
+
+    #[test]
+    fn test_convert_bacnet_property_value_boolean() {
+        let bacnet_value = BacnetPropertyValue::Boolean(true);
+        let result = type_conversion::convert_bacnet_property_value(&bacnet_value);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            PropertyValue::Boolean(v) => assert!(v),
+            _ => panic!("Expected Boolean value"),
+        }
+    }
+
+    #[test]
+    fn test_convert_bacnet_property_value_string() {
+        let bacnet_value = BacnetPropertyValue::CharacterString("test".to_string());
+        let result = type_conversion::convert_bacnet_property_value(&bacnet_value);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            PropertyValue::String(v) => assert_eq!(v, "test"),
+            _ => panic!("Expected String value"),
+        }
+    }
+
+    #[test]
+    fn test_convert_bacnet_property_value_enumerated() {
+        let bacnet_value = BacnetPropertyValue::Enumerated(5);
+        let result = type_conversion::convert_bacnet_property_value(&bacnet_value);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            PropertyValue::Enumerated(v) => assert_eq!(v, 5),
+            _ => panic!("Expected Enumerated value"),
+        }
+    }
+
+    #[test]
+    fn test_convert_bacnet_property_value_object_identifier() {
+        let obj_id = ObjectIdentifier::new(BacnetObjectType::AnalogInput, 123);
+        let bacnet_value = BacnetPropertyValue::ObjectIdentifier(obj_id);
+        let result = type_conversion::convert_bacnet_property_value(&bacnet_value);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            PropertyValue::ObjectIdentifier { object_type, instance } => {
+                assert_eq!(object_type, baccy_core::ObjectType::AnalogInput);
+                assert_eq!(instance, 123);
+            }
+            _ => panic!("Expected ObjectIdentifier value"),
+        }
+    }
+
+    #[test]
+    fn test_convert_bacnet_property_value_octet_string() {
+        let bacnet_value = BacnetPropertyValue::OctetString(vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        let result = type_conversion::convert_bacnet_property_value(&bacnet_value);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            PropertyValue::String(v) => assert_eq!(v, "deadbeef"),
+            _ => panic!("Expected String value"),
+        }
+    }
+
+    #[test]
+    fn test_convert_bacnet_property_value_null() {
+        let bacnet_value = BacnetPropertyValue::Null;
+        let result = type_conversion::convert_bacnet_property_value(&bacnet_value);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Null property values are not supported"));
+    }
+
+    #[test]
+    fn test_convert_bacnet_property_value_unknown() {
+        let bacnet_value = BacnetPropertyValue::Unknown(vec![0x01, 0x02]);
+        let result = type_conversion::convert_bacnet_property_value(&bacnet_value);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unknown property value type is not supported"));
+    }
+
+    #[test]
+    fn test_read_property_response_parsing() {
+        // Create a mock ReadPropertyResponse with multiple values
+        let obj_id = ObjectIdentifier::new(BacnetObjectType::AnalogInput, 1);
+        let property_values = vec![
+            BacnetPropertyValue::Real(72.5),
+            BacnetPropertyValue::Unsigned(100),
+        ];
+        
+        let response = ReadPropertyResponse::new(
+            obj_id,
+            PropertyIdentifier::PresentValue,
+            property_values,
+        );
+
+        // Verify we can extract the first value
+        assert!(!response.property_values.is_empty());
+        assert_eq!(response.property_values.len(), 2);
+        
+        // Convert the first value
+        let first_value = &response.property_values[0];
+        let converted = type_conversion::convert_bacnet_property_value(first_value);
+        assert!(converted.is_ok());
+        match converted.unwrap() {
+            PropertyValue::Real(v) => assert!((v - 72.5).abs() < 0.001),
+            _ => panic!("Expected Real value"),
+        }
+    }
+
+    #[test]
+    fn test_format_object_id() {
+        let object = ObjectId {
+            object_type: baccy_core::ObjectType::AnalogInput,
+            instance: 42,
+        };
+        let formatted = format_object_id(&object);
+        assert!(formatted.contains("AnalogInput"));
+        assert!(formatted.contains("42"));
+    }
+
+    #[test]
+    fn test_format_property_id() {
+        let property = PropertyId::PresentValue;
+        let formatted = format_property_id(&property);
+        assert!(formatted.contains("PresentValue"));
+    }
+
+    // Tests for Task 7.2: MS/TP address caching
+
+    #[test]
+    fn test_cache_mstp_address() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        // Create a mock transport that returns MS/TP addresses
+        struct MockMstpTransport {
+            responses: Arc<Mutex<VecDeque<(Address, Vec<u8>)>>>,
+        }
+
+        impl crate::Transport for MockMstpTransport {
+            fn send(&self, _address: &Address, _data: &[u8]) -> Result<(), TransportError> {
+                Ok(())
+            }
+
+            fn broadcast(&self, _data: &[u8]) -> Result<(), TransportError> {
+                Ok(())
+            }
+
+            fn receive(&self, _timeout: Duration) -> Result<(Address, Vec<u8>), TransportError> {
+                let mut responses = self.responses.lock().unwrap();
+                responses.pop_front().ok_or(TransportError::Timeout)
+            }
+
+            fn local_address(&self) -> Address {
+                Address::MsTp { network: 0, mac: 5 }
+            }
+        }
+
+        // Create a mock I-Am response with MS/TP source address
+        let device_id = 12345u32;
+        let vendor_id = 42u16;
+        
+        // Encode a minimal I-Am message
+        // BVLC header (4 bytes)
+        let mut iam_data = vec![0x81, 0x0A, 0x00, 0x00];
+        
+        // NPDU (minimal)
+        iam_data.extend_from_slice(&[0x01, 0x00]);
+        
+        // APDU: Unconfirmed-Request I-Am
+        iam_data.push(0x10); // Unconfirmed-Request
+        iam_data.push(0x00); // I-Am service choice
+        
+        // I-Am payload: device object identifier
+        iam_data.push(0xC4); // Object identifier tag
+        let obj_id = (8u32 << 22) | device_id; // Device object type (8) + instance
+        iam_data.extend_from_slice(&obj_id.to_be_bytes());
+        
+        // Max APDU length
+        iam_data.push(0x21); // Unsigned tag
+        iam_data.push(0x05); // 1024 bytes
+        
+        // Segmentation support
+        iam_data.push(0x91); // Enumerated tag
+        iam_data.push(0x03); // No segmentation
+        
+        // Vendor ID
+        iam_data.push(0x22); // Unsigned tag (2 bytes)
+        iam_data.extend_from_slice(&vendor_id.to_be_bytes());
+        
+        // Update BVLC length
+        let total_len = iam_data.len() as u16;
+        iam_data[2] = (total_len >> 8) as u8;
+        iam_data[3] = (total_len & 0xFF) as u8;
+        
+        // Create MS/TP source address
+        let mstp_address = Address::MsTp { network: 0, mac: 42 };
+        
+        // Create mock transport with the I-Am response
+        let mock_transport = Arc::new(MockMstpTransport {
+            responses: Arc::new(Mutex::new(VecDeque::from(vec![
+                (mstp_address.clone(), iam_data),
+            ]))),
+        });
+        
+        // Create BacnetService
+        let service = BacnetService::new(mock_transport, Duration::from_secs(1));
+        
+        // Receive I-Am (this should cache the MS/TP address)
+        let device = service.receive_iam(Duration::from_millis(100)).unwrap();
+        assert_eq!(device.instance, device_id);
+        
+        // Verify the address was cached by trying to get it
+        let cached_address = service.get_device_address(device_id).unwrap();
+        assert_eq!(cached_address, mstp_address);
+        
+        // Verify it's specifically an MS/TP address
+        match cached_address {
+            Address::MsTp { network, mac } => {
+                assert_eq!(network, 0);
+                assert_eq!(mac, 42);
+            }
+            _ => panic!("Expected MS/TP address"),
+        }
+    }
+
+    #[test]
+    fn test_cache_ip_address() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        // Create a mock transport that returns IP addresses
+        struct MockIpTransport {
+            responses: Arc<Mutex<VecDeque<(Address, Vec<u8>)>>>,
+        }
+
+        impl crate::Transport for MockIpTransport {
+            fn send(&self, _address: &Address, _data: &[u8]) -> Result<(), TransportError> {
+                Ok(())
+            }
+
+            fn broadcast(&self, _data: &[u8]) -> Result<(), TransportError> {
+                Ok(())
+            }
+
+            fn receive(&self, _timeout: Duration) -> Result<(Address, Vec<u8>), TransportError> {
+                let mut responses = self.responses.lock().unwrap();
+                responses.pop_front().ok_or(TransportError::Timeout)
+            }
+
+            fn local_address(&self) -> Address {
+                Address::Ip("0.0.0.0:47808".parse().unwrap())
+            }
+        }
+
+        // Create a mock I-Am response with IP source address
+        let device_id = 54321u32;
+        let vendor_id = 99u16;
+        
+        // Encode a minimal I-Am message (same as above)
+        let mut iam_data = vec![0x81, 0x0A, 0x00, 0x00];
+        iam_data.extend_from_slice(&[0x01, 0x00]);
+        iam_data.push(0x10);
+        iam_data.push(0x00);
+        iam_data.push(0xC4);
+        let obj_id = (8u32 << 22) | device_id;
+        iam_data.extend_from_slice(&obj_id.to_be_bytes());
+        iam_data.push(0x21);
+        iam_data.push(0x05);
+        iam_data.push(0x91);
+        iam_data.push(0x03);
+        iam_data.push(0x22);
+        iam_data.extend_from_slice(&vendor_id.to_be_bytes());
+        let total_len = iam_data.len() as u16;
+        iam_data[2] = (total_len >> 8) as u8;
+        iam_data[3] = (total_len & 0xFF) as u8;
+        
+        // Create IP source address
+        let ip_address = Address::Ip("192.168.1.100:47808".parse().unwrap());
+        
+        // Create mock transport with the I-Am response
+        let mock_transport = Arc::new(MockIpTransport {
+            responses: Arc::new(Mutex::new(VecDeque::from(vec![
+                (ip_address.clone(), iam_data),
+            ]))),
+        });
+        
+        // Create BacnetService
+        let service = BacnetService::new(mock_transport, Duration::from_secs(1));
+        
+        // Receive I-Am (this should cache the IP address)
+        let device = service.receive_iam(Duration::from_millis(100)).unwrap();
+        assert_eq!(device.instance, device_id);
+        
+        // Verify the address was cached
+        let cached_address = service.get_device_address(device_id).unwrap();
+        assert_eq!(cached_address, ip_address);
+        
+        // Verify it's specifically an IP address
+        match cached_address {
+            Address::Ip(socket_addr) => {
+                assert_eq!(socket_addr.to_string(), "192.168.1.100:47808");
+            }
+            _ => panic!("Expected IP address"),
+        }
+    }
+
+    #[test]
+    fn test_get_device_address_not_found() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        struct MockTransport;
+
+        impl crate::Transport for MockTransport {
+            fn send(&self, _address: &Address, _data: &[u8]) -> Result<(), TransportError> {
+                Ok(())
+            }
+
+            fn broadcast(&self, _data: &[u8]) -> Result<(), TransportError> {
+                Ok(())
+            }
+
+            fn receive(&self, _timeout: Duration) -> Result<(Address, Vec<u8>), TransportError> {
+                Err(TransportError::Timeout)
+            }
+
+            fn local_address(&self) -> Address {
+                Address::Ip("0.0.0.0:47808".parse().unwrap())
+            }
+        }
+
+        let service = BacnetService::new(Arc::new(MockTransport), Duration::from_secs(1));
+        
+        // Try to get address for a device that hasn't been discovered
+        let result = service.get_device_address(99999);
+        assert!(result.is_err());
+        
+        match result {
+            Err(ProtocolError::DecodingError(msg)) => {
+                assert!(msg.contains("Unknown device"));
+                assert!(msg.contains("99999"));
+                assert!(msg.contains("Who-Is/I-Am"));
+            }
+            _ => panic!("Expected DecodingError for unknown device"),
+        }
+    }
+
+    #[test]
+    fn test_cache_multiple_devices() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        struct MockTransport {
+            responses: Arc<Mutex<VecDeque<(Address, Vec<u8>)>>>,
+        }
+
+        impl crate::Transport for MockTransport {
+            fn send(&self, _address: &Address, _data: &[u8]) -> Result<(), TransportError> {
+                Ok(())
+            }
+
+            fn broadcast(&self, _data: &[u8]) -> Result<(), TransportError> {
+                Ok(())
+            }
+
+            fn receive(&self, _timeout: Duration) -> Result<(Address, Vec<u8>), TransportError> {
+                let mut responses = self.responses.lock().unwrap();
+                responses.pop_front().ok_or(TransportError::Timeout)
+            }
+
+            fn local_address(&self) -> Address {
+                Address::Ip("0.0.0.0:47808".parse().unwrap())
+            }
+        }
+
+        // Helper function to create I-Am message
+        fn create_iam_message(device_id: u32, vendor_id: u16) -> Vec<u8> {
+            let mut iam_data = vec![0x81, 0x0A, 0x00, 0x00];
+            iam_data.extend_from_slice(&[0x01, 0x00]);
+            iam_data.push(0x10);
+            iam_data.push(0x00);
+            iam_data.push(0xC4);
+            let obj_id = (8u32 << 22) | device_id;
+            iam_data.extend_from_slice(&obj_id.to_be_bytes());
+            iam_data.push(0x21);
+            iam_data.push(0x05);
+            iam_data.push(0x91);
+            iam_data.push(0x03);
+            iam_data.push(0x22);
+            iam_data.extend_from_slice(&vendor_id.to_be_bytes());
+            let total_len = iam_data.len() as u16;
+            iam_data[2] = (total_len >> 8) as u8;
+            iam_data[3] = (total_len & 0xFF) as u8;
+            iam_data
+        }
+
+        // Create responses for multiple devices with different address types
+        let responses = vec![
+            (
+                Address::MsTp { network: 0, mac: 10 },
+                create_iam_message(1000, 1),
+            ),
+            (
+                Address::Ip("192.168.1.101:47808".parse().unwrap()),
+                create_iam_message(2000, 2),
+            ),
+            (
+                Address::MsTp { network: 0, mac: 20 },
+                create_iam_message(3000, 3),
+            ),
+        ];
+
+        let mock_transport = Arc::new(MockTransport {
+            responses: Arc::new(Mutex::new(VecDeque::from(responses))),
+        });
+
+        let service = BacnetService::new(mock_transport, Duration::from_secs(1));
+
+        // Receive and cache all three devices
+        let device1 = service.receive_iam(Duration::from_millis(100)).unwrap();
+        assert_eq!(device1.instance, 1000);
+
+        let device2 = service.receive_iam(Duration::from_millis(100)).unwrap();
+        assert_eq!(device2.instance, 2000);
+
+        let device3 = service.receive_iam(Duration::from_millis(100)).unwrap();
+        assert_eq!(device3.instance, 3000);
+
+        // Verify all addresses are cached correctly
+        let addr1 = service.get_device_address(1000).unwrap();
+        match addr1 {
+            Address::MsTp { network, mac } => {
+                assert_eq!(network, 0);
+                assert_eq!(mac, 10);
+            }
+            _ => panic!("Expected MS/TP address for device 1000"),
+        }
+
+        let addr2 = service.get_device_address(2000).unwrap();
+        match addr2 {
+            Address::Ip(socket_addr) => {
+                assert_eq!(socket_addr.to_string(), "192.168.1.101:47808");
+            }
+            _ => panic!("Expected IP address for device 2000"),
+        }
+
+        let addr3 = service.get_device_address(3000).unwrap();
+        match addr3 {
+            Address::MsTp { network, mac } => {
+                assert_eq!(network, 0);
+                assert_eq!(mac, 20);
+            }
+            _ => panic!("Expected MS/TP address for device 3000"),
         }
     }
 }

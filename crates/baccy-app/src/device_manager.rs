@@ -53,6 +53,7 @@ impl DeviceManager {
         // We'll try to receive multiple responses within a 5-second window
         let discovery_timeout = Duration::from_secs(5);
         let start_time = std::time::Instant::now();
+        let mut device_count = 0;
 
         while start_time.elapsed() < discovery_timeout {
             // Try to receive an I_Am response with a short timeout
@@ -61,14 +62,26 @@ impl DeviceManager {
                 Ok(device) => {
                     // Update or insert the device (handles duplicates)
                     self.update_device(device);
+                    device_count += 1;
+                    tracing::debug!(
+                        device_count = device_count,
+                        elapsed_ms = start_time.elapsed().as_millis(),
+                        "Received I_Am response during device discovery"
+                    );
                 }
                 Err(baccy_protocol::ProtocolError::Timeout) => {
-                    // Timeout is expected when no more devices respond
+                    // Timeout is expected when no more devices respond - don't log
+                    continue;
+                }
+                Err(baccy_protocol::ProtocolError::TransportError(
+                    baccy_transport::TransportError::Timeout,
+                )) => {
+                    // Transport timeout is also expected - don't log
                     continue;
                 }
                 Err(e) => {
-                    // Other errors should be logged but not stop discovery
-                    tracing::error!(
+                    // Only log actual errors (e.g., decode failures, transport errors)
+                    tracing::warn!(
                         error = %e,
                         elapsed_ms = start_time.elapsed().as_millis(),
                         "Error receiving I_Am response during device discovery"
@@ -77,6 +90,11 @@ impl DeviceManager {
                 }
             }
         }
+
+        tracing::info!(
+            device_count = device_count,
+            "Device discovery completed"
+        );
 
         Ok(())
     }

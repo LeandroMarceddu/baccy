@@ -6,11 +6,13 @@ edition = "2021"
 [dependencies]
 baccy-core = { path = "../baccy-core" }
 baccy-protocol = { path = "../baccy-protocol" }
+baccy-transport = { path = "../baccy-transport" }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
-baccy-transport = { path = "../baccy-transport" }
 proptest = { workspace = true }
 tracing-subscriber = { workspace = true }
+serde_json = "1.0"

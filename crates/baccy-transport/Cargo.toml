@@ -8,3 +8,4 @@ baccy-core = { path = "../baccy-core" }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+serialport = "4.2"

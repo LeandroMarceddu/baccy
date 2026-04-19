@@ -186,6 +186,7 @@ impl PropertyManager {
                         PropertyValue::String(_) => DataType::CharacterString,
                         PropertyValue::Enumerated(_) => DataType::Enumerated,
                         PropertyValue::BitString(_) => DataType::BitString,
+                        PropertyValue::ObjectIdentifier { .. } => DataType::Unsigned, // Treat as unsigned for display
                     };
 
                     // Determine if property is writable (simplified logic)
@@ -405,7 +406,7 @@ pub fn parse_property_value(input: &str, data_type: DataType) -> Result<Property
                     format!("Invalid integer format: '{}'", input),
                 ))
             })?;
-            Ok(PropertyValue::Integer(value))
+            Ok(PropertyValue::Integer(value as i64))
         }
         DataType::Unsigned => {
             let value = input.parse::<u32>().map_err(|_| {
@@ -413,7 +414,7 @@ pub fn parse_property_value(input: &str, data_type: DataType) -> Result<Property
                     format!("Invalid unsigned integer format: '{}'", input),
                 ))
             })?;
-            Ok(PropertyValue::Unsigned(value))
+            Ok(PropertyValue::Unsigned(value as u64))
         }
         DataType::Boolean => {
             let value = match input.to_lowercase().as_str() {

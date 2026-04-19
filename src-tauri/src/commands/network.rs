@@ -11,6 +11,12 @@ pub struct NetworkInterface {
     pub ip: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerialPortInfo {
+    pub port_name: String,
+    pub port_type: String,
+}
+
 /// Get available network interfaces
 #[tauri::command]
 pub fn get_network_interfaces() -> Result<Vec<NetworkInterface>, String> {
@@ -43,6 +49,40 @@ pub fn get_network_interfaces() -> Result<Vec<NetworkInterface>, String> {
     Ok(interfaces)
 }
 
+/// Get available serial ports for MS/TP communication
+#[tauri::command]
+pub fn get_serial_ports() -> Result<Vec<SerialPortInfo>, String> {
+    tracing::info!("Getting available serial ports");
+    
+    match serialport::available_ports() {
+        Ok(ports) => {
+            let port_list: Vec<SerialPortInfo> = ports
+                .into_iter()
+                .map(|port| {
+                    let port_type = match port.port_type {
+                        serialport::SerialPortType::UsbPort(_) => "USB".to_string(),
+                        serialport::SerialPortType::PciPort => "PCI".to_string(),
+                        serialport::SerialPortType::BluetoothPort => "Bluetooth".to_string(),
+                        serialport::SerialPortType::Unknown => "Unknown".to_string(),
+                    };
+                    
+                    SerialPortInfo {
+                        port_name: port.port_name,
+                        port_type,
+                    }
+                })
+                .collect();
+            
+            tracing::info!("Found {} serial ports", port_list.len());
+            Ok(port_list)
+        }
+        Err(e) => {
+            tracing::error!("Failed to enumerate serial ports: {}", e);
+            Err(format!("Failed to enumerate serial ports: {}", e))
+        }
+    }
+}
+
 /// Initialize BACnet service with selected network interface
 #[tauri::command]
 pub fn initialize_service(
@@ -60,6 +100,46 @@ pub fn initialize_service(
     state.initialize_service(ipv4, port, timeout_ms)?;
     
     tracing::info!("BACnet service initialized successfully");
+    Ok(())
+}
+
+/// Connect to BACnet network using MS/TP transport
+#[tauri::command]
+pub fn connect_bacnet_mstp(
+    port_name: String,
+    baud_rate: u32,
+    local_mac: u8,
+    timeout_ms: u64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    tracing::info!(
+        port_name,
+        baud_rate,
+        local_mac,
+        timeout_ms,
+        "Connecting to BACnet MS/TP network"
+    );
+    
+    // Validate MAC address (0-127 for master nodes)
+    if local_mac > 127 {
+        return Err(format!(
+            "Invalid MAC address: {}. Master nodes must use MAC addresses 0-127.",
+            local_mac
+        ));
+    }
+    
+    // Validate baud rate
+    let valid_baud_rates = [9600, 19200, 38400, 76800, 115200];
+    if !valid_baud_rates.contains(&baud_rate) {
+        return Err(format!(
+            "Invalid baud rate: {}. Supported rates: 9600, 19200, 38400, 76800, 115200",
+            baud_rate
+        ));
+    }
+    
+    state.initialize_mstp_service(port_name, baud_rate, local_mac, timeout_ms)?;
+    
+    tracing::info!("MS/TP service initialized successfully");
     Ok(())
 }
 

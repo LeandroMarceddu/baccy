@@ -41,6 +41,9 @@ fn format_property_value(value: &PropertyValue) -> String {
                 .map(|b| if *b { '1' } else { '0' })
                 .collect()
         }
+        PropertyValue::ObjectIdentifier { object_type, instance } => {
+            format!("{}:{}", object_type.name(), instance)
+        }
     }
 }
 

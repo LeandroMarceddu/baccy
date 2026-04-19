@@ -30,7 +30,9 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::network::get_network_interfaces,
+            commands::network::get_serial_ports,
             commands::network::initialize_service,
+            commands::network::connect_bacnet_mstp,
             commands::network::shutdown_service,
             commands::devices::discover_devices,
             commands::devices::get_devices,

@@ -8,27 +8,77 @@
   import NetworkSetupDialog from "$lib/components/dialogs/NetworkSetupDialog.svelte";
   import { keyboardManager } from "$lib/keyboard";
   import { selectedDevice, selectedObject } from "$lib/stores";
+  import { transportState } from "$lib/stores/transport";
+  import type { TransportConfig } from "$lib/stores/transport";
   import { preferences } from "$lib/preferences";
 
   let error = $state("");
+  let errorDetails = $state("");
   let showErrorDialog = $state(false);
   let showNetworkSetup = $state(true);
   let isConnected = $state(false);
   let menuBarRef: MenuBar;
 
-  async function handleConnect(ip: string, port: number) {
+  async function handleConnect(config: TransportConfig) {
     try {
-      await invoke("initialize_service", {
-        ip,
-        port,
-        timeoutMs: 5000,
-      });
+      if (config.type === 'ip') {
+        await invoke("initialize_service", {
+          ip: config.ip,
+          port: config.port,
+          timeoutMs: 5000,
+        });
+        
+        transportState.set({
+          type: 'ip',
+          config: config,
+          connected: true
+        });
+        
+        console.log(`Connected to BACnet/IP service on ${config.ip}:${config.port}`);
+      } else {
+        await invoke("connect_bacnet_mstp", {
+          portName: config.portName,
+          baudRate: config.baudRate,
+          localMac: config.localMac,
+          timeoutMs: 5000,
+        });
+        
+        transportState.set({
+          type: 'mstp',
+          config: config,
+          connected: true
+        });
+        
+        console.log(`Connected to MS/TP service on ${config.portName} @ ${config.baudRate} bps, MAC ${config.localMac}`);
+      }
+      
       isConnected = true;
-      console.log(`Connected to BACnet service on ${ip}:${port}`);
     } catch (e) {
-      error = `Failed to initialize BACnet service: ${e}`;
+      const errorStr = String(e);
+      
+      // Parse MS/TP-specific errors for user-friendly messages
+      if (errorStr.includes("Permission denied") || errorStr.includes("permission denied")) {
+        error = "Serial Port Permission Denied";
+        errorDetails = `Cannot access serial port. On Linux, add your user to the 'dialout' group:\n\nsudo usermod -a -G dialout $USER\n\nThen log out and log back in.\n\nOriginal error: ${errorStr}`;
+      } else if (errorStr.includes("not found") || errorStr.includes("No such file")) {
+        error = "Serial Port Not Found";
+        errorDetails = `The selected serial port was not found. Please check that the device is connected.\n\nOriginal error: ${errorStr}`;
+      } else if (errorStr.includes("in use") || errorStr.includes("busy")) {
+        error = "Serial Port In Use";
+        errorDetails = `The serial port is already in use by another application. Please close any other programs using this port.\n\nOriginal error: ${errorStr}`;
+      } else if (errorStr.includes("Invalid MAC address")) {
+        error = "Invalid Configuration";
+        errorDetails = errorStr;
+      } else if (errorStr.includes("Invalid baud rate")) {
+        error = "Invalid Configuration";
+        errorDetails = errorStr;
+      } else {
+        error = "Connection Failed";
+        errorDetails = `Failed to initialize BACnet service: ${errorStr}`;
+      }
+      
       showErrorDialog = true;
-      console.error(error);
+      console.error(errorDetails);
     }
   }
 
@@ -107,9 +157,9 @@
   {#if error && showErrorDialog}
     <ErrorDialog
       bind:open={showErrorDialog}
-      title="Initialization Error"
-      message="Failed to initialize BACnet service"
-      details={error}
+      title={error}
+      message="Please check the configuration and try again."
+      details={errorDetails}
       onClose={() => showErrorDialog = false}
     />
   {/if}

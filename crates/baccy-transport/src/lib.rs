@@ -1,5 +1,8 @@
 // Transport abstraction and implementations
 
+pub mod frame;
+pub mod mstp;
+
 use baccy_core::Address;
 use std::io;
 use std::time::Duration;
@@ -337,3 +340,6 @@ impl Transport for BacnetIpTransport {
         Address::Ip(self.local_address)
     }
 }
+
+// Re-export MS/TP transport types
+pub use mstp::{BacnetMstpTransport, TokenState};
