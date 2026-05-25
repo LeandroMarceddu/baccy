@@ -62,7 +62,7 @@ pub async fn discover_devices(state: State<'_, AppState>) -> Result<Vec<DeviceIn
     
     let device_infos: Vec<DeviceInfo> = devices
         .iter()
-        .map(|d| DeviceInfo::from(d))
+        .map(DeviceInfo::from)
         .collect();
     
     tracing::info!("Discovered {} devices", device_infos.len());

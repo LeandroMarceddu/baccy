@@ -1,7 +1,11 @@
 // Transport abstraction and implementations
 
+pub mod bbmd;
 pub mod frame;
 pub mod mstp;
+pub mod network_stats;
+pub mod packet_log;
+pub mod router;
 
 use baccy_core::Address;
 use std::io;
@@ -160,7 +164,7 @@ impl BacnetIpTransport {
         let bind_port = bind_addr.port();
 
         // Validate port is in BACnet/IP range
-        if bind_port < Self::MIN_PORT || bind_port > Self::MAX_PORT {
+        if !(Self::MIN_PORT..=Self::MAX_PORT).contains(&bind_port) {
             let error = TransportError::BindFailed(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
@@ -238,22 +242,32 @@ impl BacnetIpTransport {
 impl Transport for BacnetIpTransport {
     fn send(&self, address: &Address, data: &[u8]) -> Result<(), TransportError> {
         match address {
-            Address::Ip(socket_addr) => match self.socket.send_to(data, socket_addr) {
-                Ok(_) => {
-                    tracing::debug!("Sent {} bytes to {}", data.len(), socket_addr);
-                    Ok(())
+            Address::Ip(socket_addr) => {
+                // Wrap in BVLC Original-Unicast-NPDU header
+                let len = 4 + data.len();
+                let mut packet = Vec::with_capacity(len);
+                packet.push(0x81);
+                packet.push(0x0A); // Original-Unicast-NPDU
+                packet.extend_from_slice(&(len as u16).to_be_bytes());
+                packet.extend_from_slice(data);
+
+                match self.socket.send_to(&packet, socket_addr) {
+                    Ok(_) => {
+                        tracing::debug!("Sent {} bytes to {}", data.len(), socket_addr);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        let error = TransportError::SendFailed(e);
+                        tracing::error!(
+                            address = %socket_addr,
+                            data_len = data.len(),
+                            error = %error,
+                            "Failed to send data to address"
+                        );
+                        Err(error)
+                    }
                 }
-                Err(e) => {
-                    let error = TransportError::SendFailed(e);
-                    tracing::error!(
-                        address = %socket_addr,
-                        data_len = data.len(),
-                        error = %error,
-                        "Failed to send data to address"
-                    );
-                    Err(error)
-                }
-            },
+            }
             Address::MsTp { network, mac } => {
                 let error = TransportError::SendFailed(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -271,7 +285,15 @@ impl Transport for BacnetIpTransport {
     }
 
     fn broadcast(&self, data: &[u8]) -> Result<(), TransportError> {
-        match self.socket.send_to(data, self.broadcast_address) {
+        // Wrap in BVLC Original-Broadcast-NPDU header
+        let len = 4 + data.len();
+        let mut packet = Vec::with_capacity(len);
+        packet.push(0x81);
+        packet.push(0x0B); // Original-Broadcast-NPDU
+        packet.extend_from_slice(&(len as u16).to_be_bytes());
+        packet.extend_from_slice(data);
+
+        match self.socket.send_to(&packet, self.broadcast_address) {
             Ok(_) => {
                 tracing::debug!(
                     "Broadcast {} bytes to {}",
@@ -310,8 +332,14 @@ impl Transport for BacnetIpTransport {
         match self.socket.recv_from(&mut buffer) {
             Ok((size, source_addr)) => {
                 buffer.truncate(size);
-                tracing::debug!("Received {} bytes from {}", size, source_addr);
-                Ok((Address::Ip(source_addr), buffer))
+                // Strip BVLC header if present (BACnet/IP)
+                let payload = if buffer.len() >= 4 && buffer[0] == 0x81 && (buffer[1] == 0x0A || buffer[1] == 0x0B) {
+                    buffer[4..].to_vec()
+                } else {
+                    buffer
+                };
+                tracing::debug!("Received {} bytes from {}", payload.len(), source_addr);
+                Ok((Address::Ip(source_addr), payload))
             }
             Err(e)
                 if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
@@ -342,4 +370,7 @@ impl Transport for BacnetIpTransport {
 }
 
 // Re-export MS/TP transport types
+pub use bbmd::{BbmdConfig, BbmdTransport};
 pub use mstp::{BacnetMstpTransport, TokenState};
+pub use packet_log::{LoggedTransport, PacketDirection, PacketLog, PacketRecord};
+pub use router::{RouteEntry, RouterTransport};

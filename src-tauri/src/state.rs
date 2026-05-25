@@ -1,25 +1,20 @@
 // Shared application state for Tauri
 
-use baccy_app::{DeviceManager, ObjectManager, PropertyManager, TransportConfig, TrendingManager};
-use baccy_protocol::BacnetService;
-use baccy_transport::{BacnetIpTransport, BacnetMstpTransport};
+use baccy_app::{CovManager, DeviceManager, ObjectManager, PropertyManager, TransportConfig, TrendingManager};
+use baccy_protocol::{BacnetService, RetryConfig, ThrottleConfig};
+use baccy_transport::network_stats::StatsCollector;
+use baccy_transport::packet_log::{LoggedTransport, PacketLog};
+use baccy_transport::{BacnetIpTransport, BacnetMstpTransport, BbmdConfig, BbmdTransport, Transport};
+use crate::commands::write_prefs::WriteProtection;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Application settings for persistence
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppSettings {
     /// Last used transport configuration
     pub last_transport: Option<TransportConfig>,
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            last_transport: None,
-        }
-    }
 }
 
 /// Shared application state
@@ -28,8 +23,12 @@ pub struct AppState {
     pub object_manager: Arc<Mutex<Option<ObjectManager>>>,
     pub property_manager: Arc<Mutex<Option<PropertyManager>>>,
     pub trending_manager: Arc<Mutex<Option<TrendingManager>>>,
+    pub cov_manager: Arc<Mutex<Option<CovManager>>>,
     pub service: Arc<Mutex<Option<Arc<BacnetService>>>>,
+    pub packet_log: Arc<Mutex<Option<Arc<PacketLog>>>>,
+    pub stats: Arc<StatsCollector>,
     pub settings: Arc<Mutex<AppSettings>>,
+    pub write_protection: WriteProtection,
 }
 
 impl AppState {
@@ -39,39 +38,115 @@ impl AppState {
             object_manager: Arc::new(Mutex::new(None)),
             property_manager: Arc::new(Mutex::new(None)),
             trending_manager: Arc::new(Mutex::new(None)),
+            cov_manager: Arc::new(Mutex::new(None)),
             service: Arc::new(Mutex::new(None)),
+            packet_log: Arc::new(Mutex::new(None)),
+            stats: Arc::new(StatsCollector::new()),
             settings: Arc::new(Mutex::new(AppSettings::default())),
+            write_protection: WriteProtection::new(),
         }
     }
 
     /// Initialize the BACnet service with the selected network interface
     pub fn initialize_service(&self, ip: std::net::Ipv4Addr, port: u16, timeout_ms: u64) -> Result<(), String> {
         let bind_addr = std::net::SocketAddr::new(std::net::IpAddr::V4(ip), port);
-        
+
+        let packet_log = Arc::new(PacketLog::new(1000));
         let transport = BacnetIpTransport::bind(bind_addr)
             .map_err(|e| format!("Failed to bind to {}: {}", bind_addr, e))?;
-        
+        let logged_transport = Arc::new(LoggedTransport::new(Arc::new(transport), Arc::clone(&packet_log)));
+
         let timeout = Duration::from_millis(timeout_ms);
-        let service = Arc::new(BacnetService::new(Arc::new(transport), timeout));
-        
+        let service = Arc::new(BacnetService::with_config(
+            logged_transport as Arc<dyn Transport>,
+            timeout,
+            Arc::clone(&self.stats),
+            RetryConfig::default(),
+            ThrottleConfig::default(),
+        ));
+
         // Initialize managers
         let device_manager = DeviceManager::new(Arc::clone(&service));
         let object_manager = ObjectManager::new(Arc::clone(&service));
         let property_manager = PropertyManager::new(Arc::clone(&service));
         let trending_manager = TrendingManager::new(Arc::clone(&service));
-        
+        let cov_manager = CovManager::new(Arc::clone(&service));
+
         // Store in state
         *self.service.lock().unwrap() = Some(service);
         *self.device_manager.lock().unwrap() = Some(device_manager);
         *self.object_manager.lock().unwrap() = Some(object_manager);
         *self.property_manager.lock().unwrap() = Some(property_manager);
         *self.trending_manager.lock().unwrap() = Some(trending_manager);
-        
+        *self.cov_manager.lock().unwrap() = Some(cov_manager);
+        *self.packet_log.lock().unwrap() = Some(Arc::clone(&packet_log));
+
         // Save transport configuration
         let config = TransportConfig::new_ip(bind_addr);
         self.settings.lock().unwrap().last_transport = Some(config);
-        
+
         tracing::info!("BACnet service initialized on {}", bind_addr);
+        Ok(())
+    }
+
+    /// Initialize the BACnet service with BBMD-enabled transport
+    pub fn initialize_bbmd_service(
+        &self,
+        ip: std::net::Ipv4Addr,
+        port: u16,
+        timeout_ms: u64,
+        bbmd_enabled: bool,
+        bbmd_address: Option<std::net::SocketAddr>,
+        registration_ttl: u32,
+    ) -> Result<(), String> {
+        let bind_addr = std::net::SocketAddr::new(std::net::IpAddr::V4(ip), port);
+
+        let packet_log = Arc::new(PacketLog::new(1000));
+        let config = BbmdConfig {
+            enabled: bbmd_enabled,
+            register_with_bbmd: bbmd_address,
+            registration_ttl,
+        };
+
+        let transport = BbmdTransport::bind(bind_addr, config)
+            .map_err(|e| format!("Failed to bind BBMD transport to {}: {}", bind_addr, e))?;
+        let logged_transport = Arc::new(LoggedTransport::new(Arc::new(transport), Arc::clone(&packet_log)));
+
+        let timeout = Duration::from_millis(timeout_ms);
+        let service = Arc::new(BacnetService::with_config(
+            logged_transport as Arc<dyn Transport>,
+            timeout,
+            Arc::clone(&self.stats),
+            RetryConfig::default(),
+            ThrottleConfig::default(),
+        ));
+
+        // Initialize managers
+        let device_manager = DeviceManager::new(Arc::clone(&service));
+        let object_manager = ObjectManager::new(Arc::clone(&service));
+        let property_manager = PropertyManager::new(Arc::clone(&service));
+        let trending_manager = TrendingManager::new(Arc::clone(&service));
+        let cov_manager = CovManager::new(Arc::clone(&service));
+
+        // Store in state
+        *self.service.lock().unwrap() = Some(service);
+        *self.device_manager.lock().unwrap() = Some(device_manager);
+        *self.object_manager.lock().unwrap() = Some(object_manager);
+        *self.property_manager.lock().unwrap() = Some(property_manager);
+        *self.trending_manager.lock().unwrap() = Some(trending_manager);
+        *self.cov_manager.lock().unwrap() = Some(cov_manager);
+        *self.packet_log.lock().unwrap() = Some(Arc::clone(&packet_log));
+
+        // Save transport configuration
+        let config = TransportConfig::new_ip(bind_addr);
+        self.settings.lock().unwrap().last_transport = Some(config);
+
+        tracing::info!(
+            "BBMD service initialized on {} (enabled: {}, register: {:?})",
+            bind_addr,
+            bbmd_enabled,
+            bbmd_address,
+        );
         Ok(())
     }
 
@@ -83,29 +158,40 @@ impl AppState {
         local_mac: u8,
         timeout_ms: u64,
     ) -> Result<(), String> {
+        let packet_log = Arc::new(PacketLog::new(1000));
         let transport = BacnetMstpTransport::new(&port_name, baud_rate, local_mac)
             .map_err(|e| Self::format_mstp_error(&e, &port_name))?;
-        
+        let logged_transport = Arc::new(LoggedTransport::new(Arc::new(transport), Arc::clone(&packet_log)));
+
         let timeout = Duration::from_millis(timeout_ms);
-        let service = Arc::new(BacnetService::new(Arc::new(transport), timeout));
-        
+        let service = Arc::new(BacnetService::with_config(
+            logged_transport as Arc<dyn Transport>,
+            timeout,
+            Arc::clone(&self.stats),
+            RetryConfig::default(),
+            ThrottleConfig::default(),
+        ));
+
         // Initialize managers
         let device_manager = DeviceManager::new(Arc::clone(&service));
         let object_manager = ObjectManager::new(Arc::clone(&service));
         let property_manager = PropertyManager::new(Arc::clone(&service));
         let trending_manager = TrendingManager::new(Arc::clone(&service));
-        
+        let cov_manager = CovManager::new(Arc::clone(&service));
+
         // Store in state
         *self.service.lock().unwrap() = Some(service);
         *self.device_manager.lock().unwrap() = Some(device_manager);
         *self.object_manager.lock().unwrap() = Some(object_manager);
         *self.property_manager.lock().unwrap() = Some(property_manager);
         *self.trending_manager.lock().unwrap() = Some(trending_manager);
-        
+        *self.cov_manager.lock().unwrap() = Some(cov_manager);
+        *self.packet_log.lock().unwrap() = Some(Arc::clone(&packet_log));
+
         // Save transport configuration
         let config = TransportConfig::new_mstp(port_name.clone(), baud_rate, local_mac);
         self.settings.lock().unwrap().last_transport = Some(config);
-        
+
         tracing::info!(
             "MS/TP service initialized on {} @ {} bps, MAC {}",
             port_name,
@@ -166,8 +252,4 @@ impl AppState {
         format!("MS/TP communication error on '{}': {}", port_name, error_str)
     }
 
-    /// Get the last used transport configuration
-    pub fn get_last_transport(&self) -> Option<TransportConfig> {
-        self.settings.lock().unwrap().last_transport.clone()
-    }
 }

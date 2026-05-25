@@ -1,21 +1,36 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { selectedDevice, selectedObject, properties } from "$lib/stores";
+  import { selectedDevice, selectedObject, properties, comparisonItems, showComparison } from "$lib/stores";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Badge } from "$lib/components/ui/badge";
   import { preferences } from "$lib/preferences";
+  import { Shield } from "lucide-svelte";
   import * as Table from "$lib/components/ui/table";
   import type { Property } from "$lib/stores";
   
-  let loading = false;
-  let error = "";
-  let editingProperty: string | null = null;
-  let editValue = "";
-  
-  $: if ($selectedDevice && $selectedObject && $preferences.autoRefresh) {
-    loadProperties();
+  interface ProtectedKey {
+    device_id: number;
+    object_type: string;
+    instance: number;
+    property_id: string;
   }
+
+  let loading = $state(false);
+  let error = $state("");
+  let editingProperty = $state<string | null>(null);
+  let editValue = $state("");
+  let showWriteConfirm = $state(false);
+  let pendingProp = $state<Property | null>(null);
+  let dontAskAgain = $state(false);
+  let confirmError = $state("");
+  let protectionRules = $state<ProtectedKey[]>([]);
+  
+  $effect(() => {
+    if ($selectedDevice && $selectedObject && $preferences.autoRefresh) {
+      loadProperties();
+    }
+  });
   
   async function loadProperties() {
     if (!$selectedDevice || !$selectedObject) return;
@@ -23,12 +38,16 @@
     loading = true;
     error = "";
     try {
-      const result = await invoke("load_properties", {
-        deviceId: $selectedDevice.instance,
-        objectType: $selectedObject.object_type,
-        objectInstance: $selectedObject.instance
-      });
+      const [result, rules] = await Promise.all([
+        invoke("load_properties", {
+          deviceId: $selectedDevice.instance,
+          objectType: $selectedObject.object_type,
+          objectInstance: $selectedObject.instance
+        }),
+        invoke("get_all_write_protections")
+      ]);
       properties.set(result as Property[]);
+      protectionRules = rules as ProtectedKey[];
     } catch (e) {
       error = String(e);
     } finally {
@@ -36,6 +55,37 @@
     }
   }
   
+  function isPropProtected(propId: string): boolean {
+    if (!$selectedDevice || !$selectedObject) return false;
+    return protectionRules.some(rule => 
+      (rule.device_id === 0 || rule.device_id === $selectedDevice.instance) &&
+      (rule.object_type === "" || rule.object_type === $selectedObject.object_type) &&
+      (rule.instance === 0 || rule.instance === $selectedObject.instance) &&
+      rule.property_id === propId
+    );
+  }
+
+  async function togglePropProtection(prop: Property) {
+    if (!$selectedDevice || !$selectedObject) return;
+    const currentlyProtected = isPropProtected(prop.id);
+    const key = {
+      device_id: $selectedDevice.instance,
+      object_type: $selectedObject.object_type,
+      instance: $selectedObject.instance,
+      property_id: prop.id,
+    };
+    try {
+      await invoke("set_write_protection", {
+        key,
+        protected: !currentlyProtected,
+      });
+      const rules = await invoke("get_all_write_protections");
+      protectionRules = rules as ProtectedKey[];
+    } catch (e) {
+      error = `Failed to toggle write protection: ${e}`;
+    }
+  }
+
   function startEdit(prop: Property) {
     if (prop.writable) {
       editingProperty = prop.id;
@@ -46,20 +96,53 @@
   function cancelEdit() {
     editingProperty = null;
     editValue = "";
+    showWriteConfirm = false;
+    pendingProp = null;
+    dontAskAgain = false;
+    confirmError = "";
   }
   
   async function saveEdit(prop: Property) {
     if (!$selectedDevice || !$selectedObject) return;
     
-    // Check if confirmation is required
     if ($preferences.confirmPropertyWrite) {
-      const confirmed = confirm(`Are you sure you want to write "${editValue}" to ${prop.name}?`);
-      if (!confirmed) {
-        cancelEdit();
+      if (isPropProtected(prop.id)) {
+        pendingProp = prop;
+        showWriteConfirm = true;
+        dontAskAgain = false;
         return;
       }
     }
     
+    await doWrite(prop);
+  }
+  
+  async function confirmWrite() {
+    if (!pendingProp) return;
+    if (dontAskAgain) {
+      try {
+        await invoke("set_write_protection", {
+          key: {
+            device_id: $selectedDevice!.instance,
+            object_type: $selectedObject!.object_type,
+            instance: $selectedObject!.instance,
+            property_id: pendingProp.id,
+          },
+          protected: false,
+        });
+        const rules = await invoke("get_all_write_protections");
+        protectionRules = rules as ProtectedKey[];
+      } catch (e) {
+        confirmError = String(e);
+        return;
+      }
+    }
+    showWriteConfirm = false;
+    await doWrite(pendingProp);
+  }
+  
+  async function doWrite(prop: Property) {
+    if (!$selectedDevice || !$selectedObject) return;
     try {
       await invoke("update_property", {
         deviceId: $selectedDevice.instance,
@@ -69,7 +152,6 @@
         value: editValue
       });
       
-      // Refresh properties after update
       await loadProperties();
       cancelEdit();
     } catch (e) {
@@ -78,25 +160,9 @@
   }
   
   async function addToTrending(prop: Property) {
-    console.log("addToTrending called for:", prop.name);
-    console.log("Selected device:", $selectedDevice);
-    console.log("Selected object:", $selectedObject);
-    
-    if (!$selectedDevice || !$selectedObject) {
-      console.error("No device or object selected");
-      return;
-    }
+    if (!$selectedDevice || !$selectedObject) return;
     
     try {
-      console.log("Invoking add_to_trending with:", {
-        deviceId: $selectedDevice.instance,
-        objectType: $selectedObject.object_type,
-        objectInstance: $selectedObject.instance,
-        propertyId: prop.id,
-        name: `${$selectedObject.name} - ${prop.name}`,
-        units: prop.data_type
-      });
-      
       await invoke("add_to_trending", {
         deviceId: $selectedDevice.instance,
         objectType: $selectedObject.object_type,
@@ -105,12 +171,8 @@
         name: `${$selectedObject.name} - ${prop.name}`,
         units: prop.data_type
       });
-      
-      // Show success feedback
-      console.log(`✅ Successfully added ${prop.name} to trending`);
     } catch (e) {
       error = `Failed to add to trending: ${e}`;
-      console.error("❌ Error adding to trending:", error);
     }
   }
 </script>
@@ -118,14 +180,58 @@
 <div class="flex h-full flex-col">
   <div class="flex items-center justify-between border-b p-4">
     <h2 class="text-lg font-semibold">Properties</h2>
-    <Button size="sm" onclick={loadProperties} disabled={loading || !$selectedObject}>
-      {loading ? "Loading..." : "Refresh"}
-    </Button>
+    <div class="flex items-center gap-2">
+      <Button
+        size="sm"
+        variant="outline"
+        onclick={() => {
+          if ($selectedObject) {
+            comparisonItems.set([{
+              device_id: $selectedDevice?.instance ?? 0,
+              object_type: $selectedObject.object_type,
+              instance: $selectedObject.instance,
+            }]);
+            showComparison.set(true);
+          }
+        }}
+        disabled={!$selectedObject}
+      >
+        Compare
+      </Button>
+      <Button size="sm" onclick={loadProperties} disabled={loading || !$selectedObject}>
+        {loading ? "Loading..." : "Refresh"}
+      </Button>
+    </div>
   </div>
   
   {#if error}
     <div class="m-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
       {error}
+    </div>
+  {/if}
+  
+  {#if showWriteConfirm && pendingProp}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div class="w-full max-w-md rounded-lg border bg-background p-6 shadow-lg">
+        <h3 class="mb-2 text-lg font-semibold">Confirm Write</h3>
+        <p class="mb-1 text-sm">
+          Property <strong>{pendingProp.name}</strong> on {$selectedObject?.object_type}/{$selectedObject?.instance} is write-protected.
+        </p>
+        <p class="mb-4 text-sm">
+          Value: <strong>{editValue}</strong>
+        </p>
+        {#if confirmError}
+          <div class="mb-4 rounded-md bg-destructive/10 p-2 text-sm text-destructive">{confirmError}</div>
+        {/if}
+        <div class="flex items-center gap-4">
+          <Button onclick={confirmWrite}>Write Anyway</Button>
+          <Button variant="outline" onclick={cancelEdit}>Cancel</Button>
+        </div>
+        <label class="mt-4 flex items-center gap-2 text-sm">
+          <input type="checkbox" bind:checked={dontAskAgain} />
+          Don't ask again for this property
+        </label>
+      </div>
     </div>
   {/if}
   
@@ -151,7 +257,24 @@
         <Table.Body>
           {#each $properties as prop}
             <Table.Row style="background-color: rgba(59, 130, 246, {prop.highlight_opacity * 0.2})">
-              <Table.Cell class="font-medium">{prop.name}</Table.Cell>
+              <Table.Cell class="font-medium">
+                <div class="flex items-center gap-2">
+                  <span>{prop.name}</span>
+                  {#if prop.writable}
+                    <button
+                      onclick={() => togglePropProtection(prop)}
+                      class="inline-flex h-6 w-6 items-center justify-center rounded-md p-0 transition-colors hover:bg-accent text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      title={isPropProtected(prop.id) ? "Write protected (requires confirmation)" : "Click to write protect"}
+                    >
+                      {#if isPropProtected(prop.id)}
+                        <Shield class="h-3.5 w-3.5 text-amber-500 fill-amber-500/20" />
+                      {:else}
+                        <Shield class="h-3.5 w-3.5 opacity-30 hover:opacity-100" />
+                      {/if}
+                    </button>
+                  {/if}
+                </div>
+              </Table.Cell>
               <Table.Cell>
                 {#if editingProperty === prop.id}
                   <div class="flex gap-2">

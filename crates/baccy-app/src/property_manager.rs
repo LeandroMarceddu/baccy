@@ -124,52 +124,18 @@ impl PropertyManager {
     /// # Errors
     /// Returns `AppError::ProtocolError` if properties cannot be retrieved
     pub fn load_properties(&mut self, device: DeviceId, object: ObjectId) -> Result<(), AppError> {
-        // Clear existing properties
         self.properties.clear();
 
-        // Select properties based on object type
-        let property_ids = match object.object_type {
-            baccy_core::ObjectType::Device => {
-                // Device objects have different properties than I/O objects
-                vec![
-                    PropertyId::ObjectName,
-                    // Device-specific properties would go here
-                    // PropertyId::VendorName, PropertyId::ModelName, etc.
-                ]
+        // Step 1: Try dynamic property discovery via PropertyList
+        let property_ids = match self.service.read_property_list(device, object) {
+            Ok(Some(list)) if !list.is_empty() => {
+                list.into_iter()
+                    .filter(|id| !should_skip_property(*id))
+                    .collect()
             }
-            baccy_core::ObjectType::AnalogInput
-            | baccy_core::ObjectType::AnalogOutput
-            | baccy_core::ObjectType::AnalogValue => {
-                // Analog objects
-                vec![
-                    PropertyId::ObjectName,
-                    PropertyId::PresentValue,
-                    PropertyId::Description,
-                    PropertyId::Units,
-                    PropertyId::StatusFlags,
-                ]
-            }
-            baccy_core::ObjectType::BinaryInput
-            | baccy_core::ObjectType::BinaryOutput
-            | baccy_core::ObjectType::BinaryValue => {
-                // Binary objects
-                vec![
-                    PropertyId::ObjectName,
-                    PropertyId::PresentValue,
-                    PropertyId::Description,
-                    PropertyId::StatusFlags,
-                ]
-            }
-            baccy_core::ObjectType::MultiStateInput
-            | baccy_core::ObjectType::MultiStateOutput
-            | baccy_core::ObjectType::MultiStateValue => {
-                // Multi-state objects
-                vec![
-                    PropertyId::ObjectName,
-                    PropertyId::PresentValue,
-                    PropertyId::Description,
-                    PropertyId::StatusFlags,
-                ]
+            _ => {
+                // Fall back to hardcoded list
+                self.get_hardcoded_property_ids(object.object_type)
             }
         };
 
@@ -186,7 +152,7 @@ impl PropertyManager {
                         PropertyValue::String(_) => DataType::CharacterString,
                         PropertyValue::Enumerated(_) => DataType::Enumerated,
                         PropertyValue::BitString(_) => DataType::BitString,
-                        PropertyValue::ObjectIdentifier { .. } => DataType::Unsigned, // Treat as unsigned for display
+                        PropertyValue::ObjectIdentifier { .. } => DataType::ObjectIdentifier,
                     };
 
                     // Determine if property is writable (simplified logic)
@@ -258,6 +224,13 @@ impl PropertyManager {
     /// A reference to the property if found, None otherwise
     pub fn get_property(&self, id: PropertyId) -> Option<&Property> {
         self.properties.get(&id)
+    }
+
+    /// List all loaded properties
+    pub fn list_properties(&self) -> Vec<(PropertyId, &Property)> {
+        let mut result: Vec<_> = self.properties.iter().map(|(id, p)| (*id, p)).collect();
+        result.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+        result
     }
 
     /// Update a property value from a string input
@@ -380,6 +353,77 @@ impl PropertyManager {
     pub fn get_highlight_opacity(&self, property_id: PropertyId) -> f32 {
         self.highlight_tracker.get_opacity(property_id)
     }
+
+    /// Fall back to hardcoded property lists based on object type.
+    fn get_hardcoded_property_ids(&self, object_type: baccy_core::ObjectType) -> Vec<PropertyId> {
+        match object_type {
+            baccy_core::ObjectType::Device => {
+                vec![
+                    PropertyId::ObjectName,
+                    PropertyId::VendorName,
+                    PropertyId::ModelName,
+                    PropertyId::FirmwareRevision,
+                    PropertyId::AppSoftwareRevision,
+                    PropertyId::ProtocolVersion,
+                    PropertyId::ProtocolRevision,
+                    PropertyId::Description,
+                    PropertyId::Location,
+                    PropertyId::ProfileName,
+                ]
+            }
+            baccy_core::ObjectType::AnalogInput
+            | baccy_core::ObjectType::AnalogOutput
+            | baccy_core::ObjectType::AnalogValue => {
+                vec![
+                    PropertyId::ObjectName,
+                    PropertyId::PresentValue,
+                    PropertyId::Description,
+                    PropertyId::Units,
+                    PropertyId::StatusFlags,
+                ]
+            }
+            baccy_core::ObjectType::BinaryInput
+            | baccy_core::ObjectType::BinaryOutput
+            | baccy_core::ObjectType::BinaryValue => {
+                vec![
+                    PropertyId::ObjectName,
+                    PropertyId::PresentValue,
+                    PropertyId::Description,
+                    PropertyId::StatusFlags,
+                ]
+            }
+            baccy_core::ObjectType::MultiStateInput
+            | baccy_core::ObjectType::MultiStateOutput
+            | baccy_core::ObjectType::MultiStateValue => {
+                vec![
+                    PropertyId::ObjectName,
+                    PropertyId::PresentValue,
+                    PropertyId::Description,
+                    PropertyId::StatusFlags,
+                ]
+            }
+            _ => {
+                vec![
+                    PropertyId::ObjectName,
+                    PropertyId::Description,
+                    PropertyId::PresentValue,
+                ]
+            }
+        }
+    }
+}
+
+/// Determine if a property should be skipped from display/reading
+/// (internal or potentially very large list properties)
+fn should_skip_property(id: PropertyId) -> bool {
+    matches!(
+        id,
+        PropertyId::PropertyList
+            | PropertyId::ObjectList
+            | PropertyId::StructuredObjectList
+            | PropertyId::ActiveCovSubscriptions
+            | PropertyId::ActiveCovMultipleSubscriptions
+    )
 }
 
 /// Parse a string value into a PropertyValue based on the data type
@@ -440,11 +484,60 @@ pub fn parse_property_value(input: &str, data_type: DataType) -> Result<Property
             })?;
             Ok(PropertyValue::Enumerated(value))
         }
-        DataType::BitString => Err(AppError::ProtocolError(
-            baccy_protocol::ProtocolError::EncodingError(
-                "BitString editing not yet supported".to_string(),
-            ),
-        )),
+        DataType::ObjectIdentifier => {
+            // Format: "ObjectType:Instance" e.g. "AnalogInput:123"
+            let parts: Vec<&str> = input.splitn(2, ':').collect();
+            if parts.len() != 2 {
+                return Err(AppError::ProtocolError(
+                    baccy_protocol::ProtocolError::EncodingError(
+                        "Invalid ObjectIdentifier format. Use 'ObjectType:Instance' (e.g. 'AnalogInput:123')".to_string(),
+                    ),
+                ));
+            }
+            let instance = parts[1].parse::<u32>().map_err(|_| {
+                AppError::ProtocolError(baccy_protocol::ProtocolError::EncodingError(
+                    format!("Invalid object instance number: '{}'", parts[1]),
+                ))
+            })?;
+            let object_type = baccy_core::ObjectType::from_debug_name(parts[0])
+                .or_else(|| baccy_core::ObjectType::from_display_name(parts[0]))
+                .ok_or_else(|| AppError::ProtocolError(
+                    baccy_protocol::ProtocolError::EncodingError(
+                        format!("Unknown object type: '{}'", parts[0]),
+                    ),
+                ))?;
+            Ok(PropertyValue::ObjectIdentifier { object_type, instance })
+        }
+        DataType::BitString => {
+            let bits: Vec<bool> = if input.contains(',') {
+                input.split(',')
+                    .map(|s| match s.trim() {
+                        "1" | "true" | "yes" => Ok(true),
+                        "0" | "false" | "no" => Ok(false),
+                        _ => Err(AppError::ProtocolError(
+                            baccy_protocol::ProtocolError::EncodingError(format!(
+                                "Invalid BitString value: '{}'. Use binary digits (0/1) or true/false separated by commas",
+                                s.trim()
+                            )),
+                        )),
+                    })
+                    .collect::<Result<_, _>>()?
+            } else {
+                input.chars()
+                    .map(|c| match c {
+                        '1' => Ok(true),
+                        '0' => Ok(false),
+                        _ => Err(AppError::ProtocolError(
+                            baccy_protocol::ProtocolError::EncodingError(format!(
+                                "Invalid BitString character: '{}'. Use only 0 and 1",
+                                c
+                            )),
+                        )),
+                    })
+                    .collect::<Result<_, _>>()?
+            };
+            Ok(PropertyValue::BitString(bits))
+        }
     }
 }
 

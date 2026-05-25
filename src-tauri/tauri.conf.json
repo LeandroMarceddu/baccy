@@ -1,6 +1,6 @@
 {
   "productName": "Baccy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.baccy.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -25,7 +25,11 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all"
+    "active": true,
+    "targets": ["deb", "appimage", "msi", "nsis", "dmg"],
+    "icon": ["icons/icon.png"],
+    "category": "DeveloperTool",
+    "shortDescription": "BACnet browser and testing tool",
+    "longDescription": "A cross-platform BACnet browser and testing tool for discovering and interacting with BACnet devices on your network."
   }
 }

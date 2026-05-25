@@ -1,5 +1,6 @@
 // Application logic layer
 
+mod cov_manager;
 mod device_manager;
 mod network_manager;
 mod object_manager;
@@ -7,6 +8,7 @@ mod property_manager;
 mod trending_manager;
 mod transport_config;
 
+pub use cov_manager::CovManager;
 pub use device_manager::DeviceManager;
 pub use network_manager::NetworkManager;
 pub use object_manager::ObjectManager;

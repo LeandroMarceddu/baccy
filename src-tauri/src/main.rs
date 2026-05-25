@@ -29,9 +29,11 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::compare::compare_objects,
             commands::network::get_network_interfaces,
             commands::network::get_serial_ports,
             commands::network::initialize_service,
+            commands::network::initialize_service_bbmd,
             commands::network::connect_bacnet_mstp,
             commands::network::shutdown_service,
             commands::devices::discover_devices,
@@ -49,6 +51,24 @@ fn main() {
             commands::trending::clear_trending,
             commands::trending::toggle_trending_visibility,
             commands::trending::poll_trending,
+            commands::search::who_has_by_name,
+            commands::search::who_has_by_object,
+            commands::cov::subscribe_cov,
+            commands::cov::subscribe_cov_property,
+            commands::cov::unsubscribe_cov,
+            commands::cov::poll_cov_notifications,
+            commands::packet::get_packet_log,
+            commands::packet::clear_packet_log,
+            commands::packet::set_packet_logging,
+            commands::device::get_device_info,
+            commands::health::get_device_health,
+            commands::network::get_network_stats,
+            commands::network::get_throttle_status,
+            commands::export::export_device_config,
+            commands::export::import_device_config,
+            commands::write_prefs::is_write_protected,
+            commands::write_prefs::set_write_protection,
+            commands::write_prefs::get_all_write_protections,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

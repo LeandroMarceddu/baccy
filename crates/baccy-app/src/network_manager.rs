@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_network_manager_ip_creation() {
-        let addr: SocketAddr = "0.0.0.0:47808".parse().unwrap();
+        let addr: SocketAddr = "127.0.0.1:47822".parse().unwrap();
         let config = TransportConfig::new_ip(addr);
         let timeout = Duration::from_secs(5);
 
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn test_network_manager_config_description() {
-        let addr: SocketAddr = "0.0.0.0:47808".parse().unwrap();
+        let addr: SocketAddr = "127.0.0.1:47823".parse().unwrap();
         let config = TransportConfig::new_ip(addr);
         let timeout = Duration::from_secs(5);
 
@@ -166,6 +166,6 @@ mod tests {
         let desc = manager.config().description();
 
         assert!(desc.contains("BACnet/IP"));
-        assert!(desc.contains("0.0.0.0:47808"));
+        assert!(desc.contains("127.0.0.1:47823"));
     }
 }

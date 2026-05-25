@@ -18,6 +18,7 @@
   let showNetworkSetup = $state(true);
   let isConnected = $state(false);
   let menuBarRef: MenuBar;
+  let showPacketInspector = $state(false);
 
   async function handleConnect(config: TransportConfig) {
     try {
@@ -132,6 +133,15 @@
       }
     });
 
+    keyboardManager.register({
+      key: 'p',
+      ctrl: true,
+      description: 'Toggle Packet Inspector',
+      action: () => {
+        showPacketInspector = !showPacketInspector;
+      }
+    });
+
     // Global keyboard event handler
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
@@ -150,7 +160,7 @@
 </script>
 
 <div class="flex h-screen flex-col bg-background">
-  <MenuBar bind:this={menuBarRef} />
+  <MenuBar bind:this={menuBarRef} onTogglePacketInspector={() => showPacketInspector = !showPacketInspector} />
   
   <NetworkSetupDialog bind:open={showNetworkSetup} onConnect={handleConnect} />
   
@@ -166,7 +176,7 @@
 
   {#if isConnected}
     <div class="flex-1 overflow-hidden">
-      <Layout />
+      <Layout bind:showPacketInspector />
     </div>
     {#if $preferences.showStatusBar}
       <StatusBar />

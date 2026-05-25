@@ -1,6 +1,7 @@
 // Network interface selection and initialization commands
 
 use crate::state::AppState;
+use baccy_transport::network_stats::NetworkStats;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use tauri::State;
@@ -143,6 +144,54 @@ pub fn connect_bacnet_mstp(
     Ok(())
 }
 
+/// Initialize BACnet service with BBMD support
+#[tauri::command]
+pub fn initialize_service_bbmd(
+    ip: String,
+    port: u16,
+    timeout_ms: u64,
+    bbmd_enabled: bool,
+    bbmd_address: Option<String>,
+    bbmd_port: Option<u16>,
+    bbmd_ttl: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    tracing::info!(
+        ip,
+        port,
+        timeout_ms,
+        bbmd_enabled,
+        bbmd_addr = ?bbmd_address,
+        bbmd_port,
+        "Initializing BACnet service with BBMD"
+    );
+
+    let ipv4: Ipv4Addr = ip
+        .parse()
+        .map_err(|e| format!("Invalid IP address: {}", e))?;
+
+    let bbmd_addr = match (bbmd_address, bbmd_port) {
+        (Some(addr), Some(bp)) => {
+            let full = format!("{}:{}", addr, bp);
+            Some(full.parse::<std::net::SocketAddr>()
+                .map_err(|e| format!("Invalid BBMD address: {}", e))?)
+        }
+        (Some(addr), None) => {
+            let full = format!("{}:47808", addr);
+            Some(full.parse::<std::net::SocketAddr>()
+                .map_err(|e| format!("Invalid BBMD address: {}", e))?)
+        }
+        (None, _) => None,
+    };
+
+    let ttl = bbmd_ttl.unwrap_or(120);
+
+    state.initialize_bbmd_service(ipv4, port, timeout_ms, bbmd_enabled, bbmd_addr, ttl)?;
+
+    tracing::info!("BBMD service initialized successfully");
+    Ok(())
+}
+
 /// Shutdown the current service
 #[tauri::command]
 pub fn shutdown_service(state: State<'_, AppState>) -> Result<(), String> {
@@ -157,4 +206,20 @@ pub fn shutdown_service(state: State<'_, AppState>) -> Result<(), String> {
     
     tracing::info!("Service shut down successfully");
     Ok(())
+}
+
+/// Get current network statistics
+#[tauri::command]
+pub fn get_network_stats(state: State<'_, AppState>) -> Result<NetworkStats, String> {
+    Ok(state.stats.snapshot())
+}
+
+/// Get per-device throttle concurrency counts
+#[tauri::command]
+pub fn get_throttle_status(state: State<'_, AppState>) -> Result<std::collections::HashMap<u32, usize>, String> {
+    let service_guard = state.service.lock().unwrap();
+    match service_guard.as_ref() {
+        Some(service) => Ok(service.throttle().all_concurrency()),
+        None => Ok(std::collections::HashMap::new()),
+    }
 }

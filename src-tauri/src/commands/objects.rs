@@ -57,9 +57,27 @@ pub async fn load_objects(
     .map_err(|e| format!("Task error: {}", e))?
     .map_err(|e| format!("Failed to load objects: {}", e))?;
     
+    // Sync state manager
+    {
+        let service = {
+            let service_lock = state.service.lock().unwrap();
+            service_lock.as_ref().map(|s| s.clone())
+        };
+        if let Some(_svc) = service {
+            let object_manager = state.object_manager.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Ok(mut manager_guard) = object_manager.lock() {
+                    if let Some(manager) = manager_guard.as_mut() {
+                        let _ = manager.load_objects(device_id);
+                    }
+                }
+            });
+        }
+    }
+    
     let object_infos: Vec<ObjectInfo> = objects
         .iter()
-        .map(|o| ObjectInfo::from(o))
+        .map(ObjectInfo::from)
         .collect();
     
     tracing::info!(device_id, object_count = object_infos.len(), "Objects loaded successfully");

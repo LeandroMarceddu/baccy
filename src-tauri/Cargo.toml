@@ -1,6 +1,6 @@
 [package]
 name = "baccy"
-version = "0.1.0"
+version = "0.2.0"
 description = "BACnet Browser and Testing Tool"
 authors = ["Baccy Team"]
 edition = "2021"

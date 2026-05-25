@@ -4,7 +4,6 @@ export interface LayoutState {
   leftPanelSize: number;
   rightPanelSize: number;
   bottomPanelSize: number;
-  trendingVisible: boolean;
 }
 
 const LAYOUT_STORAGE_KEY = 'baccy-layout-state';
@@ -13,7 +12,6 @@ const DEFAULT_LAYOUT: LayoutState = {
   leftPanelSize: 20,
   rightPanelSize: 30,
   bottomPanelSize: 30,
-  trendingVisible: false,
 };
 
 export function saveLayoutState(state: LayoutState) {
@@ -34,9 +32,6 @@ export function loadLayoutState(): LayoutState {
         leftPanelSize: validateSize(parsed.leftPanelSize, DEFAULT_LAYOUT.leftPanelSize),
         rightPanelSize: validateSize(parsed.rightPanelSize, DEFAULT_LAYOUT.rightPanelSize),
         bottomPanelSize: validateSize(parsed.bottomPanelSize, DEFAULT_LAYOUT.bottomPanelSize),
-        trendingVisible: typeof parsed.trendingVisible === 'boolean' 
-          ? parsed.trendingVisible 
-          : DEFAULT_LAYOUT.trendingVisible,
       };
     }
   } catch (error) {

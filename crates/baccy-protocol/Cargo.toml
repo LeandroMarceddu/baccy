@@ -7,4 +7,5 @@ edition = "2021"
 baccy-core = { path = "../baccy-core" }
 baccy-transport = { path = "../baccy-transport" }
 bacnet-rs = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }

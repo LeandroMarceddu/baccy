@@ -48,23 +48,12 @@ fn format_property_value(value: &PropertyValue) -> String {
 }
 
 fn parse_object_type(type_str: &str) -> Result<ObjectType, String> {
-    match type_str {
-        "Analog Input" => Ok(ObjectType::AnalogInput),
-        "Analog Output" => Ok(ObjectType::AnalogOutput),
-        "Analog Value" => Ok(ObjectType::AnalogValue),
-        "Binary Input" => Ok(ObjectType::BinaryInput),
-        "Binary Output" => Ok(ObjectType::BinaryOutput),
-        "Binary Value" => Ok(ObjectType::BinaryValue),
-        "Device" => Ok(ObjectType::Device),
-        "Multi-State Input" => Ok(ObjectType::MultiStateInput),
-        "Multi-State Output" => Ok(ObjectType::MultiStateOutput),
-        "Multi-State Value" => Ok(ObjectType::MultiStateValue),
-        _ => Err(format!("Unknown object type: {}", type_str)),
-    }
+    ObjectType::from_display_name(type_str)
+        .or_else(|| ObjectType::from_debug_name(type_str))
+        .ok_or_else(|| format!("Unknown object type: {}", type_str))
 }
 
 fn parse_property_id(id_str: &str) -> Result<PropertyId, String> {
-    // Remove spaces and handle both formats
     let normalized = id_str.replace(" ", "");
     
     match normalized.as_str() {
@@ -77,6 +66,14 @@ fn parse_property_id(id_str: &str) -> Result<PropertyId, String> {
         "Reliability" => Ok(PropertyId::Reliability),
         "EventState" => Ok(PropertyId::EventState),
         "Priority" => Ok(PropertyId::Priority),
+        "VendorName" => Ok(PropertyId::VendorName),
+        "ModelName" => Ok(PropertyId::ModelName),
+        "FirmwareRevision" => Ok(PropertyId::FirmwareRevision),
+        "AppSoftwareRevision" => Ok(PropertyId::AppSoftwareRevision),
+        "ProtocolVersion" => Ok(PropertyId::ProtocolVersion),
+        "ProtocolRevision" => Ok(PropertyId::ProtocolRevision),
+        "Location" => Ok(PropertyId::Location),
+        "ProfileName" => Ok(PropertyId::ProfileName),
         _ => Err(format!("Unknown property ID: {}", id_str)),
     }
 }
@@ -116,28 +113,54 @@ pub async fn load_properties(
         let mut manager = baccy_app::PropertyManager::new(service);
         manager.load_properties(device_id, object_id)?;
         
-        // Collect properties with their highlight opacity
-        let props: Vec<(Property, f32)> = [
+        // Collect all loaded properties with their highlight opacity
+        let prop_ids: Vec<PropertyId> = [
             PropertyId::ObjectName,
             PropertyId::PresentValue,
             PropertyId::Description,
             PropertyId::Units,
             PropertyId::StatusFlags,
+            PropertyId::VendorName,
+            PropertyId::ModelName,
+            PropertyId::FirmwareRevision,
+            PropertyId::AppSoftwareRevision,
+            PropertyId::ProtocolVersion,
+            PropertyId::ProtocolRevision,
+            PropertyId::Location,
+            PropertyId::ProfileName,
         ]
-        .iter()
-        .filter_map(|&prop_id| {
+        .to_vec();
+        
+        let props: Vec<(Property, f32)> = prop_ids.iter().filter_map(|&prop_id| {
             manager.get_property(prop_id).map(|prop| {
                 let opacity = manager.get_highlight_opacity(prop_id);
                 (prop.clone(), opacity)
             })
-        })
-        .collect();
+        }).collect();
         
         Ok::<Vec<(Property, f32)>, baccy_app::AppError>(props)
     })
     .await
     .map_err(|e| format!("Task error: {}", e))?
     .map_err(|e| format!("Failed to load properties: {}", e))?;
+    
+    // Sync state manager
+    {
+        let service = {
+            let service_lock = state.service.lock().unwrap();
+            service_lock.as_ref().map(|s| s.clone())
+        };
+        if let Some(_svc) = service {
+            let property_manager = state.property_manager.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Ok(mut manager_guard) = property_manager.lock() {
+                    if let Some(manager) = manager_guard.as_mut() {
+                        let _ = manager.load_properties(device_id, object_id);
+                    }
+                }
+            });
+        }
+    }
     
     let property_infos: Vec<PropertyInfo> = properties
         .iter()
@@ -163,21 +186,28 @@ pub fn get_properties(state: State<'_, AppState>) -> Result<Vec<PropertyInfo>, S
         .as_ref()
         .ok_or("No properties loaded")?;
     
-    let properties: Vec<PropertyInfo> = [
+    let prop_ids: Vec<PropertyId> = [
         PropertyId::ObjectName,
         PropertyId::PresentValue,
         PropertyId::Description,
         PropertyId::Units,
         PropertyId::StatusFlags,
-    ]
-    .iter()
-    .filter_map(|&prop_id| {
+        PropertyId::VendorName,
+        PropertyId::ModelName,
+        PropertyId::FirmwareRevision,
+        PropertyId::AppSoftwareRevision,
+        PropertyId::ProtocolVersion,
+        PropertyId::ProtocolRevision,
+        PropertyId::Location,
+        PropertyId::ProfileName,
+    ].to_vec();
+    
+    let properties: Vec<PropertyInfo> = prop_ids.iter().filter_map(|&prop_id| {
         manager.get_property(prop_id).map(|prop| {
             let opacity = manager.get_highlight_opacity(prop_id);
             PropertyInfo::from_property(prop, opacity)
         })
-    })
-    .collect();
+    }).collect();
     
     Ok(properties)
 }
@@ -275,28 +305,54 @@ pub async fn refresh_properties(
         let mut manager = baccy_app::PropertyManager::new(service);
         manager.refresh(device_id, object_id)?;
         
-        // Collect properties with their highlight opacity
-        let props: Vec<(Property, f32)> = [
+        // Collect all loaded properties with their highlight opacity
+        let prop_ids: Vec<PropertyId> = [
             PropertyId::ObjectName,
             PropertyId::PresentValue,
             PropertyId::Description,
             PropertyId::Units,
             PropertyId::StatusFlags,
+            PropertyId::VendorName,
+            PropertyId::ModelName,
+            PropertyId::FirmwareRevision,
+            PropertyId::AppSoftwareRevision,
+            PropertyId::ProtocolVersion,
+            PropertyId::ProtocolRevision,
+            PropertyId::Location,
+            PropertyId::ProfileName,
         ]
-        .iter()
-        .filter_map(|&prop_id| {
+        .to_vec();
+        
+        let props: Vec<(Property, f32)> = prop_ids.iter().filter_map(|&prop_id| {
             manager.get_property(prop_id).map(|prop| {
                 let opacity = manager.get_highlight_opacity(prop_id);
                 (prop.clone(), opacity)
             })
-        })
-        .collect();
+        }).collect();
         
         Ok::<Vec<(Property, f32)>, baccy_app::AppError>(props)
     })
     .await
     .map_err(|e| format!("Task error: {}", e))?
     .map_err(|e| format!("Failed to refresh properties: {}", e))?;
+    
+    // Sync state manager
+    {
+        let service = {
+            let service_lock = state.service.lock().unwrap();
+            service_lock.as_ref().map(|s| s.clone())
+        };
+        if let Some(_svc) = service {
+            let property_manager = state.property_manager.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Ok(mut manager_guard) = property_manager.lock() {
+                    if let Some(manager) = manager_guard.as_mut() {
+                        let _ = manager.refresh(device_id, object_id);
+                    }
+                }
+            });
+        }
+    }
     
     let property_infos: Vec<PropertyInfo> = properties
         .iter()

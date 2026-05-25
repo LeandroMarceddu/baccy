@@ -5,7 +5,6 @@
 
 use crate::frame::MstpFrame;
 use crate::TransportError;
-use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
@@ -162,13 +161,6 @@ pub struct BacnetMstpTransport {
     
     /// Local MAC address (0-127 for master nodes)
     local_mac: u8,
-    
-    /// Baud rate for serial communication
-    baud_rate: u32,
-    
-    /// Buffer for received frames waiting to be processed
-    /// Wrapped in Arc<Mutex<>> for thread-safe access
-    frame_buffer: Arc<Mutex<VecDeque<MstpFrame>>>,
     
     /// Token manager for token passing state machine
     /// Wrapped in Arc<Mutex<>> for thread-safe access
@@ -339,8 +331,7 @@ impl BacnetMstpTransport {
 
                         TransportError::BindFailed(std::io::Error::new(io_kind, msg))
                     }
-                    _ => TransportError::BindFailed(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    _ => TransportError::BindFailed(std::io::Error::other(
                         format!("Failed to open serial port '{}': {}", port_name, e),
                     )),
                 };
@@ -365,14 +356,14 @@ impl BacnetMstpTransport {
         // Initialize token manager with HaveToken state so we can send immediately
         // In a real MS/TP network, we would need to participate in token passing,
         // but for initial implementation we start with the token to allow sending
-        let mut token_manager = TokenManager::default();
-        token_manager.state = TokenState::HaveToken { frames_sent: 0 };
+        let token_manager = TokenManager {
+            state: TokenState::HaveToken { frames_sent: 0 },
+            ..Default::default()
+        };
 
         Ok(Self {
             port: Arc::new(Mutex::new(port)),
             local_mac,
-            baud_rate,
-            frame_buffer: Arc::new(Mutex::new(VecDeque::new())),
             token_manager: Arc::new(Mutex::new(token_manager)),
         })
     }

@@ -25,19 +25,9 @@ pub struct TrendedPropertyInfo {
 }
 
 fn parse_object_type(type_str: &str) -> Result<ObjectType, String> {
-    match type_str {
-        "Analog Input" => Ok(ObjectType::AnalogInput),
-        "Analog Output" => Ok(ObjectType::AnalogOutput),
-        "Analog Value" => Ok(ObjectType::AnalogValue),
-        "Binary Input" => Ok(ObjectType::BinaryInput),
-        "Binary Output" => Ok(ObjectType::BinaryOutput),
-        "Binary Value" => Ok(ObjectType::BinaryValue),
-        "Device" => Ok(ObjectType::Device),
-        "Multi-State Input" => Ok(ObjectType::MultiStateInput),
-        "Multi-State Output" => Ok(ObjectType::MultiStateOutput),
-        "Multi-State Value" => Ok(ObjectType::MultiStateValue),
-        _ => Err(format!("Unknown object type: {}", type_str)),
-    }
+    ObjectType::from_display_name(type_str)
+        .or_else(|| ObjectType::from_debug_name(type_str))
+        .ok_or_else(|| format!("Unknown object type: {}", type_str))
 }
 
 fn parse_property_id(id_str: &str) -> Result<PropertyId, String> {

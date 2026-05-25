@@ -1,7 +1,7 @@
 // Object manager for managing BACnet objects within a device
 
 use crate::AppError;
-use baccy_core::{BacnetObject, DeviceId, ObjectId, ObjectType};
+use baccy_core::{BacnetObject, DeviceId, ObjectId, ObjectType, PropertyId, PropertyValue};
 use baccy_protocol::BacnetService;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -66,13 +66,10 @@ impl ObjectManager {
         // Clear existing objects
         self.objects.clear();
 
-        // For each object ID, create a BacnetObject and store it
-        // In a real implementation, we would read the object-name property
-        // For now, we'll create placeholder objects
         tracing::info!(
             device_id = device,
             object_count = object_ids.len(),
-            "Creating BacnetObject entries for {} objects",
+            "Reading ObjectName for {} objects",
             object_ids.len()
         );
 
@@ -84,10 +81,19 @@ impl ObjectManager {
                 "Adding object to manager"
             );
 
+            let name = match self.service.read_property(
+                device,
+                object_id,
+                PropertyId::ObjectName,
+            ) {
+                Ok(PropertyValue::String(name)) => name,
+                _ => format!("{:?} {}", object_id.object_type, object_id.instance),
+            };
+
             let object = BacnetObject {
                 object_type: object_id.object_type,
                 instance: object_id.instance,
-                name: format!("{:?} {}", object_id.object_type, object_id.instance),
+                name,
             };
             self.objects.insert(object_id, object);
         }
@@ -132,7 +138,7 @@ impl ObjectManager {
         for object in self.objects.values() {
             grouped
                 .entry(object.object_type)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(object);
         }
 

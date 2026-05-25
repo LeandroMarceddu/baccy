@@ -5,7 +5,9 @@ edition = "2021"
 
 [dependencies]
 baccy-core = { path = "../baccy-core" }
+bacnet-rs = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 serialport = "4.2"
+serde = { workspace = true }
