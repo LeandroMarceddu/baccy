@@ -27,7 +27,7 @@
   "bundle": {
     "active": true,
     "targets": ["deb", "appimage", "msi", "nsis", "dmg"],
-    "icon": ["icons/icon.png", "icons/icon.ico", "icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png"],
+    "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns", "icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png"],
     "category": "DeveloperTool",
     "shortDescription": "BACnet browser and testing tool",
     "longDescription": "A cross-platform BACnet browser and testing tool for discovering and interacting with BACnet devices on your network."
