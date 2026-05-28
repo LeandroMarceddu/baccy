@@ -2,17 +2,6 @@
 
 A cross-platform BACnet browser and testing tool built with Tauri, Rust, and Svelte.
 
-## Changelog
-
-### 2026-04-19 - MS/TP Support & Improvements
-- **Added MS/TP transport support** - Full BACnet MS/TP (Master-Slave/Token-Passing) implementation for RS-485 serial networks
-- **Upgraded bacnet-rs** - Updated from v0.2.2 to v0.3 with improved type safety
-- **Serial port configuration** - Support for baud rates: 9600, 19200, 38400, 76800, 115200
-- **Token passing state machine** - Proper MS/TP master node token management
-- **Transport selection UI** - Switch between BACnet/IP and MS/TP in network setup dialog
-- **Improved logging** - Cleaner discovery logs without timeout noise
-- **Bug fixes** - Fixed token state initialization for immediate frame transmission
-
 ## Features
 
 - Device discovery via Who-Is/I-Am broadcasts
