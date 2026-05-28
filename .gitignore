@@ -30,6 +30,9 @@ pnpm-debug.log*
 *.sln
 *.sw?
 
+# Analysis / scratch
+ANALYSIS.md
+
 # Environment
 .env
 .env.local
