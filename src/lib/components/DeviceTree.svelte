@@ -2,10 +2,12 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onMount, onDestroy } from "svelte";
   import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { Label } from "$lib/components/ui/label";
   import { ScrollArea } from "$lib/components/ui/scroll-area";
   import { Separator } from "$lib/components/ui/separator";
   import { Badge } from "$lib/components/ui/badge";
-  import { RefreshCw, Copy, Info } from "lucide-svelte";
+  import { RefreshCw, Copy, Info, Search } from "lucide-svelte";
   import ContextMenu from "./ContextMenu.svelte";
   import { selectedDevice, deviceHealth } from "$lib/stores";
   
@@ -28,6 +30,10 @@
   let loading = $state(false);
   let error = $state("");
   let healthPollInterval: ReturnType<typeof setInterval> | null = null;
+  let showRangeDiscovery = $state(false);
+  let rangeLow = $state(0);
+  let rangeHigh = $state(4194303);
+  let rangeLoading = $state(false);
   
   async function discoverDevices() {
     loading = true;
@@ -38,6 +44,26 @@
       error = String(e);
     } finally {
       loading = false;
+    }
+  }
+
+  async function discoverRange() {
+    if (rangeLow > rangeHigh) {
+      error = "Low bound must be ≤ high bound";
+      return;
+    }
+    rangeLoading = true;
+    error = "";
+    try {
+      const newDevices = await invoke<Device[]>("discover_devices_range", { low: rangeLow, high: rangeHigh });
+      // Merge with existing devices, dedup by instance
+      const existing = new Map(devices.map(d => [d.instance, d]));
+      for (const d of newDevices) existing.set(d.instance, d);
+      devices = Array.from(existing.values());
+    } catch (e) {
+      error = String(e);
+    } finally {
+      rangeLoading = false;
     }
   }
 
@@ -64,6 +90,34 @@
   
   function selectDevice(device: Device) {
     selectedDevice.set(device);
+  }
+
+  async function sendReinitialize(device: Device, state_code: number, label: string) {
+    const password = prompt(`Enter password for ${label} on ${device.name} (leave blank if none):`);
+    try {
+      await invoke("reinitialize_device", {
+        deviceId: device.instance,
+        reinitState: state_code,
+        password: password || null,
+      });
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function sendDcc(device: Device, enable: boolean) {
+    const password = prompt(`Enter password to ${enable ? 'enable' : 'disable'} communication on ${device.name}:`);
+    const duration = prompt("Time duration in seconds (0 = indefinite, blank = indefinite):");
+    try {
+      await invoke("device_communication_control", {
+        deviceId: device.instance,
+        enable: enable,
+        timeDuration: duration ? parseInt(duration) || null : null,
+        password: password || null,
+      });
+    } catch (e) {
+      error = String(e);
+    }
   }
 
   function getContextMenuItems(device: Device) {
@@ -97,6 +151,28 @@
         action: () => {
           alert(`Device: ${device.name}\nInstance: ${device.instance}\nVendor: ${device.vendor_name} (${device.vendor_id})`);
         }
+      },
+      { separator: true } as any,
+      {
+        label: 'Coldstart',
+        icon: RefreshCw,
+        action: () => sendReinitialize(device, 0, 'Coldstart')
+      },
+      {
+        label: 'Warmstart',
+        icon: RefreshCw,
+        action: () => sendReinitialize(device, 1, 'Warmstart')
+      },
+      { separator: true } as any,
+      {
+        label: 'Enable Communication',
+        icon: Copy,
+        action: () => sendDcc(device, true)
+      },
+      {
+        label: 'Disable Communication',
+        icon: Copy,
+        action: () => sendDcc(device, false)
       }
     ];
   }
@@ -123,10 +199,33 @@
 <div class="flex h-full flex-col">
   <div class="flex items-center justify-between border-b p-4">
     <h2 class="text-lg font-semibold">Devices</h2>
-    <Button size="sm" onclick={discoverDevices} disabled={loading}>
-      {loading ? "Discovering..." : "Discover"}
-    </Button>
+    <div class="flex gap-1">
+      <Button size="sm" onclick={() => showRangeDiscovery = !showRangeDiscovery} variant="ghost" title="Range Discovery">
+        <Search class="h-4 w-4" />
+      </Button>
+      <Button size="sm" onclick={discoverDevices} disabled={loading}>
+        {loading ? "Discovering..." : "Discover"}
+      </Button>
+    </div>
   </div>
+
+  {#if showRangeDiscovery}
+    <div class="border-b p-2 space-y-2">
+      <div class="flex gap-2 items-end">
+        <div class="flex-1 space-y-1">
+          <Label class="text-xs">Low</Label>
+          <Input type="number" min="0" bind:value={rangeLow} class="h-8 text-xs" />
+        </div>
+        <div class="flex-1 space-y-1">
+          <Label class="text-xs">High</Label>
+          <Input type="number" min="0" max="4194303" bind:value={rangeHigh} class="h-8 text-xs" />
+        </div>
+        <Button size="sm" onclick={discoverRange} disabled={rangeLoading}>
+          {rangeLoading ? "..." : "Scan"}
+        </Button>
+      </div>
+    </div>
+  {/if}
   
   {#if error}
     <div class="m-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">

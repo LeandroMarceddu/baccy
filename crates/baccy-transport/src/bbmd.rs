@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 
 /// A registered foreign device entry in the FDT (Foreign Device Table)
 #[derive(Debug, Clone)]
-struct ForeignDeviceEntry {
-    address: SocketAddr,
-    time_to_live: u32,
-    registration_time: Instant,
+pub struct ForeignDeviceEntry {
+    pub address: SocketAddr,
+    pub time_to_live: u32,
+    pub registration_time: Instant,
 }
 
 /// A peer BBMD entry in the BDT (Broadcast Distribution Table)
@@ -20,6 +20,15 @@ struct BdtEntry {
     ip: [u8; 4],
     port: u16,
     subnet_mask: [u8; 4],
+}
+
+/// BBMD registration status
+#[derive(Debug, Clone)]
+pub struct RegistrationStatus {
+    pub registered_to: Option<SocketAddr>,
+    pub last_registration: Option<Instant>,
+    pub ttl: Option<u32>,
+    pub time_until_renewal: Option<u32>,
 }
 
 /// Configuration for BBMD operation
@@ -215,6 +224,28 @@ impl BbmdTransport {
             self.send_foreign_registration()?;
         }
         Ok(())
+    }
+
+    /// Get the foreign device table (FDT) — list of registered foreign devices
+    pub fn fdt_entries(&self) -> Vec<ForeignDeviceEntry> {
+        self.expire_fdt();
+        self.fdt.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Get the BBMD registration status
+    pub fn registration_status(&self) -> RegistrationStatus {
+        let bbmd = self.bbmd_address.lock().unwrap();
+        let last = self.last_registration.lock().unwrap();
+        RegistrationStatus {
+            registered_to: *bbmd,
+            last_registration: *last,
+            ttl: if bbmd.is_some() { Some(self.config.registration_ttl) } else { None },
+            time_until_renewal: last.map(|t| {
+                let elapsed = t.elapsed().as_secs() as u32;
+                let renew_at = (self.config.registration_ttl as f32 * 0.75) as u32;
+                renew_at.saturating_sub(elapsed)
+            }),
+        }
     }
 
     // -----------------------------------------------------------------

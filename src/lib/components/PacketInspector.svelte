@@ -8,7 +8,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { ScrollArea } from "$lib/components/ui/scroll-area";
-  import { Delete, Download, Pause, Play } from "lucide-svelte";
+  import { Copy, Delete, Download, Pause, Play } from "lucide-svelte";
 
   interface PacketRecord {
     timestamp_ms: number;
@@ -65,6 +65,11 @@
     URL.revokeObjectURL(url);
   }
 
+  function copyHex() {
+    const hex = packets.map(p => `[${p.direction.toUpperCase()}] ${p.source} -> ${p.destination} (${p.length}B)\n${p.hex}`).join('\n\n');
+    navigator.clipboard.writeText(hex);
+  }
+
   function toggleRow(idx: number) {
     expandedRow = expandedRow === idx ? null : idx;
   }
@@ -97,6 +102,9 @@
       </Button>
       <Button variant="ghost" size="sm" onclick={clearLog} title="Clear log">
         <Delete class="h-4 w-4" />
+      </Button>
+      <Button variant="ghost" size="sm" onclick={copyHex} title="Copy all as BACnet Hex" disabled={packets.length === 0}>
+        <Copy class="h-4 w-4" />
       </Button>
       <Button variant="ghost" size="sm" onclick={downloadLog} title="Download log">
         <Download class="h-4 w-4" />

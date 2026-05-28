@@ -3,6 +3,7 @@
   import { onMount, onDestroy } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
+  import { Download } from "lucide-svelte";
   import { preferences } from "$lib/preferences";
   import { Chart, registerables } from 'chart.js';
   import 'chartjs-adapter-date-fns';
@@ -152,6 +153,21 @@
     }
   }
   
+  async function exportCsv() {
+    try {
+      const csv = await invoke<string>("export_trending_csv");
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `trending-${Date.now()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
   async function clearAll() {
     try {
       await invoke("clear_trending");
@@ -208,9 +224,14 @@
 <div class="flex h-full flex-col">
   <div class="flex items-center justify-between border-b p-4">
     <h2 class="text-lg font-semibold">Trending</h2>
-    <Button size="sm" variant="destructive" onclick={clearAll} disabled={trendedProperties.length === 0}>
-      Clear All
-    </Button>
+    <div class="flex gap-1">
+      <Button size="sm" variant="outline" onclick={exportCsv} disabled={trendedProperties.length === 0}>
+        <Download class="h-4 w-4" />
+      </Button>
+      <Button size="sm" variant="destructive" onclick={clearAll} disabled={trendedProperties.length === 0}>
+        Clear All
+      </Button>
+    </div>
   </div>
   
   {#if error}

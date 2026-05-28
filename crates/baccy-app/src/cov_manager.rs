@@ -11,7 +11,7 @@ struct CovSubscription {
     object_id: ObjectId,
     property_id: Option<PropertyId>,
     subscriber_process_id: u32,
-    callback: Box<dyn Fn(CovNotification) + Send>,
+    callback: Arc<dyn Fn(CovNotification) + Send + Sync>,
 }
 
 impl std::fmt::Debug for CovSubscription {
@@ -49,7 +49,7 @@ impl CovManager {
         device_id: DeviceId,
         object_id: ObjectId,
         lifetime: Option<u32>,
-        callback: Box<dyn Fn(CovNotification) + Send>,
+        callback: Arc<dyn Fn(CovNotification) + Send + Sync>,
     ) -> Result<u32, ProtocolError> {
         let process_id = self.next_process_id.fetch_add(1, Ordering::SeqCst);
 
@@ -76,7 +76,7 @@ impl CovManager {
         property_id: PropertyId,
         lifetime: Option<u32>,
         cov_increment: Option<f32>,
-        callback: Box<dyn Fn(CovNotification) + Send>,
+        callback: Arc<dyn Fn(CovNotification) + Send + Sync>,
     ) -> Result<u32, ProtocolError> {
         let process_id = self.next_process_id.fetch_add(1, Ordering::SeqCst);
 
@@ -170,18 +170,15 @@ impl CovManager {
     }
 }
 
-// Need Clone for CovSubscription for the unsubscribe path
-// We box the callback so we can implement Clone manually
+// Arc<dyn Fn> enables Clone without losing the callback
 impl Clone for CovSubscription {
     fn clone(&self) -> Self {
-        // Since we can't clone Box<dyn Fn>, we create an empty/noop callback.
-        // This is only used for reading subscription info, not for cloning callbacks.
         Self {
             device_id: self.device_id,
             object_id: self.object_id,
             property_id: self.property_id,
             subscriber_process_id: self.subscriber_process_id,
-            callback: Box::new(|_| {}),
+            callback: Arc::clone(&self.callback),
         }
     }
 }

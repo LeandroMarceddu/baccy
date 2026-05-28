@@ -171,6 +171,40 @@ pub fn get_trending_data(state: State<'_, AppState>) -> Result<Vec<TrendedProper
     Ok(properties)
 }
 
+/// Export trending data as CSV
+#[tauri::command]
+pub fn export_trending_csv(state: State<'_, AppState>) -> Result<String, String> {
+    let trending_manager_guard = state.trending_manager.lock().unwrap();
+    let trending_manager = trending_manager_guard
+        .as_ref()
+        .ok_or("Service not initialized")?;
+
+    let mut csv = String::from("Device,Object Type,Instance,Property,Name,Units,Timestamp,Value\n");
+    for prop in trending_manager.properties().iter() {
+        let obj_type = prop.object_id.object_type.name();
+        for dp in &prop.history {
+            let elapsed_ms = dp.timestamp.elapsed().as_millis() as u64;
+            let base_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            let ts = base_time.saturating_sub(elapsed_ms);
+            csv.push_str(&format!(
+                "{},{},{},{},{},{},{},{}\n",
+                prop.device_id,
+                obj_type,
+                prop.object_id.instance,
+                format!("{:?}", prop.property_id),
+                prop.name,
+                prop.units,
+                ts,
+                dp.value
+            ));
+        }
+    }
+    Ok(csv)
+}
+
 /// Clear all trending data
 #[tauri::command]
 pub fn clear_trending(state: State<'_, AppState>) -> Result<(), String> {

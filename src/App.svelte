@@ -23,11 +23,23 @@
   async function handleConnect(config: TransportConfig) {
     try {
       if (config.type === 'ip') {
-        await invoke("initialize_service", {
-          ip: config.ip,
-          port: config.port,
-          timeoutMs: 5000,
-        });
+        if (config.bbmdEnabled) {
+          await invoke("initialize_service_bbmd", {
+            ip: config.ip,
+            port: config.port,
+            timeoutMs: 5000,
+            bbmdEnabled: true,
+            bbmdAddress: config.bbmdAddress || null,
+            bbmdPort: config.bbmdPort || null,
+            bbmdTtl: config.bbmdTtl || 120,
+          });
+        } else {
+          await invoke("initialize_service", {
+            ip: config.ip,
+            port: config.port,
+            timeoutMs: 5000,
+          });
+        }
         
         transportState.set({
           type: 'ip',

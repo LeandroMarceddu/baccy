@@ -8,6 +8,8 @@
   import PacketInspector from "./PacketInspector.svelte";
   import DeviceInfo from "./DeviceInfo.svelte";
   import NetworkStats from "./NetworkStats.svelte";
+  import BbmdConfig from "./BbmdConfig.svelte";
+  import DeviceRouter from "./DeviceRouter.svelte";
   import { showComparison } from "$lib/stores";
   import { loadLayoutState } from "$lib/layout-persistence";
 
@@ -18,7 +20,7 @@
   let { showPacketInspector = $bindable(false) }: Props = $props();
 
   let layoutState = loadLayoutState();
-  let rightPanelTab: 'trending' | 'packets' | 'network' = $state('trending');
+  let rightPanelTab: 'trending' | 'packets' | 'network' | 'bbmd' | 'router' = $state('trending');
 </script>
 
 <ResizablePaneGroup direction="horizontal" class="h-full">
@@ -92,12 +94,28 @@
         >
           Network Stats
         </button>
+        <button
+          class="flex-1 px-3 py-1.5 text-xs font-medium transition-colors {rightPanelTab === 'bbmd' ? 'bg-muted border-b-2 border-primary' : 'hover:bg-muted/50'}"
+          onclick={() => rightPanelTab = 'bbmd'}
+        >
+          BBMD
+        </button>
+        <button
+          class="flex-1 px-3 py-1.5 text-xs font-medium transition-colors {rightPanelTab === 'router' ? 'bg-muted border-b-2 border-primary' : 'hover:bg-muted/50'}"
+          onclick={() => rightPanelTab = 'router'}
+        >
+          Router
+        </button>
       </div>
       <div class="flex-1 overflow-hidden">
         {#if rightPanelTab === 'trending'}
           <TrendingPanel />
         {:else if rightPanelTab === 'packets'}
           <PacketInspector />
+        {:else if rightPanelTab === 'bbmd'}
+          <BbmdConfig />
+        {:else if rightPanelTab === 'router'}
+          <DeviceRouter />
         {:else}
           <NetworkStats />
         {/if}

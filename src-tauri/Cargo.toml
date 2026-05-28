@@ -1,6 +1,6 @@
 [package]
 name = "baccy"
-version = "0.2.0"
+version = "0.3.0"
 description = "BACnet Browser and Testing Tool"
 authors = ["Baccy Team"]
 edition = "2021"
@@ -19,6 +19,7 @@ anyhow = "1.0"
 tokio = { version = "1", features = ["full"] }
 if-addrs = "0.13"
 serialport = { workspace = true }
+dirs = { workspace = true }
 
 # Baccy crates
 baccy-core = { path = "../crates/baccy-core" }

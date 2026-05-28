@@ -30,6 +30,10 @@
   let interfaces = $state<NetworkInterface[]>([]);
   let selectedIp = $state("0.0.0.0");
   let port = $state(47808);
+  let bbmdEnabled = $state(false);
+  let bbmdAddress = $state("");
+  let bbmdPort = $state(47808);
+  let bbmdTtl = $state(120);
   
   // MS/TP state
   let serialPorts = $state<SerialPortInfo[]>([]);
@@ -100,7 +104,11 @@
       const config: TransportConfig = {
         type: 'ip',
         ip: selectedIp,
-        port: port
+        port: port,
+        bbmdEnabled: bbmdEnabled,
+        bbmdAddress: bbmdAddress || undefined,
+        bbmdPort: bbmdEnabled ? bbmdPort : undefined,
+        bbmdTtl: bbmdEnabled ? bbmdTtl : undefined,
       };
       onConnect(config);
       open = false;
@@ -226,6 +234,51 @@
             Default BACnet/IP port is 47808
           </p>
         </div>
+
+        <!-- BBMD Configuration -->
+        <div class="space-y-2">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" bind:checked={bbmdEnabled} class="h-4 w-4" />
+            <span class="text-sm font-medium">Enable BBMD (Foreign Device)</span>
+          </label>
+        </div>
+
+        {#if bbmdEnabled}
+          <div class="ml-4 space-y-2 border-l-2 border-muted pl-4">
+            <div class="space-y-2">
+              <Label for="bbmd-address">BBMD Address</Label>
+              <Input
+                id="bbmd-address"
+                type="text"
+                placeholder="e.g. 10.0.0.1"
+                bind:value={bbmdAddress}
+              />
+            </div>
+            <div class="space-y-2">
+              <Label for="bbmd-port">BBMD Port</Label>
+              <Input
+                id="bbmd-port"
+                type="number"
+                min="1"
+                max="65535"
+                bind:value={bbmdPort}
+              />
+            </div>
+            <div class="space-y-2">
+              <Label for="bbmd-ttl">Registration TTL (seconds)</Label>
+              <Input
+                id="bbmd-ttl"
+                type="number"
+                min="30"
+                max="3600"
+                bind:value={bbmdTtl}
+              />
+              <p class="text-xs text-muted-foreground">
+                How often to re-register with the BBMD (default: 120s)
+              </p>
+            </div>
+          </div>
+        {/if}
       {:else}
         <!-- MS/TP Configuration -->
         <div class="space-y-2">

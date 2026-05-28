@@ -3,6 +3,7 @@
 use crate::state::AppState;
 use baccy_core::{ObjectId, ObjectType, PropertyId, PropertyValue};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::State;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,7 +95,7 @@ pub async fn subscribe_cov(
         let manager = manager.as_ref().ok_or("Service not initialized")?;
 
         let process_id = manager
-            .subscribe(device_id, object_id, lifetime_seconds, Box::new(|_| {}))
+            .subscribe(device_id, object_id, lifetime_seconds, Arc::new(|_| {}))
             .map_err(|e| format!("Failed to subscribe COV: {}", e))?;
 
         tracing::info!(
@@ -136,7 +137,7 @@ pub async fn subscribe_cov_property(
         let manager = manager.as_ref().ok_or("Service not initialized")?;
 
         let process_id = manager
-            .subscribe_property(device_id, object_id, prop_id, lifetime_seconds, cov_increment, Box::new(|_| {}))
+            .subscribe_property(device_id, object_id, prop_id, lifetime_seconds, cov_increment, Arc::new(|_| {}))
             .map_err(|e| format!("Failed to subscribe COV property: {}", e))?;
 
         tracing::info!(

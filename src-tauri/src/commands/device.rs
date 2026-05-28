@@ -134,3 +134,58 @@ pub async fn get_device_info(
 
     Ok(result)
 }
+
+/// Reinitialize a BACnet device (coldstart/warmstart/backup/restore)
+#[tauri::command]
+pub async fn reinitialize_device(
+    device_id: u32,
+    reinit_state: u32,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    tracing::info!(device_id, reinit_state, "Reinitializing device");
+
+    let service = {
+        let service_lock = state.service.lock().unwrap();
+        service_lock
+            .as_ref()
+            .ok_or("BACnet service not initialized")?
+            .clone()
+    };
+
+    tokio::task::spawn_blocking(move || {
+        service
+            .reinitialize_device(device_id, reinit_state, password.as_deref())
+            .map_err(|e| format!("ReinitializeDevice failed: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// Enable or disable communication with a BACnet device
+#[tauri::command]
+pub async fn device_communication_control(
+    device_id: u32,
+    enable: bool,
+    time_duration: Option<u32>,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    tracing::info!(device_id, enable, "Setting device communication control");
+
+    let service = {
+        let service_lock = state.service.lock().unwrap();
+        service_lock
+            .as_ref()
+            .ok_or("BACnet service not initialized")?
+            .clone()
+    };
+
+    tokio::task::spawn_blocking(move || {
+        service
+            .device_communication_control(device_id, time_duration, enable, password.as_deref())
+            .map_err(|e| format!("DeviceCommunicationControl failed: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+}

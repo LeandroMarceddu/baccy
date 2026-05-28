@@ -24,6 +24,49 @@ impl From<&Device> for DeviceInfo {
     }
 }
 
+/// Discover BACnet devices within an instance range
+#[tauri::command]
+pub async fn discover_devices_range(
+    low: u32,
+    high: u32,
+    state: State<'_, AppState>,
+) -> Result<Vec<DeviceInfo>, String> {
+    tracing::info!(low, high, "Starting device range discovery");
+
+    let service = {
+        let service_lock = state.service.lock().unwrap();
+        service_lock
+            .as_ref()
+            .ok_or("BACnet service not initialized")?
+            .clone()
+    };
+
+    let devices = tokio::task::spawn_blocking(move || {
+        let mut manager = baccy_app::DeviceManager::new(service);
+        manager.discover_devices_range(low, high)?;
+        Ok::<Vec<baccy_core::Device>, baccy_app::AppError>(
+            manager.list_devices().into_iter().cloned().collect()
+        )
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+    .map_err(|e| format!("Range discovery failed: {}", e))?;
+
+    {
+        let mut device_manager = state.device_manager.lock().unwrap();
+        if let Some(manager) = device_manager.as_mut() {
+            for device in &devices {
+                manager.update_device(device.clone());
+            }
+        }
+    }
+
+    let device_infos: Vec<DeviceInfo> = devices.iter().map(DeviceInfo::from).collect();
+
+    tracing::info!("Discovered {} devices in range [{}-{}]", device_infos.len(), low, high);
+    Ok(device_infos)
+}
+
 /// Discover BACnet devices on the network
 #[tauri::command]
 pub async fn discover_devices(state: State<'_, AppState>) -> Result<Vec<DeviceInfo>, String> {

@@ -1087,6 +1087,10 @@ impl BacnetService {
         }
     }
 
+    pub fn get_transport(&self) -> Arc<dyn Transport> {
+        Arc::clone(&self.transport)
+    }
+
     pub fn get_stats(&self) -> Arc<StatsCollector> {
         Arc::clone(&self.stats)
     }
@@ -1281,7 +1285,6 @@ impl BacnetService {
         let mut message = Npdu::global_broadcast().encode();
         message.extend_from_slice(&apdu.encode());
 
-        self.stats.record_send(message.len());
         self.stats.record_send(message.len());
         self.transport.broadcast(&message)?;
         Ok(())

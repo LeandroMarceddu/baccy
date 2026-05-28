@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Condvar, Mutex};
 
-/// Per-device request throttle using a simple semaphore pattern.
+/// Per-device request throttle using a semaphore pattern with Condvar.
 /// Limits the number of concurrent in-flight requests to a single BACnet device.
 pub struct RequestThrottle {
     max_concurrent: usize,
     state: Mutex<HashMap<u32, DeviceState>>,
+    cvar: Condvar,
 }
 
 #[derive(Default)]
@@ -19,20 +19,20 @@ impl RequestThrottle {
         Self {
             max_concurrent,
             state: Mutex::new(HashMap::new()),
+            cvar: Condvar::new(),
         }
     }
 
     /// Acquire a permit, blocking until one is available
     pub fn acquire(&self, device_id: u32) {
+        let mut state = self.state.lock().unwrap();
         loop {
-            let mut state = self.state.lock().unwrap();
-            let dev = state.entry(device_id).or_default();
-            if dev.current_count < self.max_concurrent {
+            if state.get(&device_id).map_or(true, |d| d.current_count < self.max_concurrent) {
+                let dev = state.entry(device_id).or_default();
                 dev.current_count += 1;
                 return;
             }
-            drop(state);
-            std::thread::sleep(Duration::from_millis(20));
+            state = self.cvar.wait(state).unwrap();
         }
     }
 
@@ -42,6 +42,7 @@ impl RequestThrottle {
         if let Some(dev) = state.get_mut(&device_id) {
             dev.current_count = dev.current_count.saturating_sub(1);
         }
+        self.cvar.notify_all();
     }
 
     /// Get current concurrency for a device

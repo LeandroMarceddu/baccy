@@ -4,6 +4,10 @@ export interface IpConfig {
   type: 'ip';
   ip: string;
   port: number;
+  bbmdEnabled?: boolean;
+  bbmdAddress?: string;
+  bbmdPort?: number;
+  bbmdTtl?: number;
 }
 
 export interface MstpConfig {

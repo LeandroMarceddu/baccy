@@ -1,6 +1,8 @@
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::State;
 
@@ -12,14 +14,42 @@ pub struct ProtectedKey {
     pub property_id: String,
 }
 
+fn rules_file_path() -> PathBuf {
+    let mut path = if let Some(data_dir) = dirs::data_dir() {
+        data_dir
+    } else {
+        PathBuf::from(".")
+    };
+    path.push("baccy");
+    let _ = fs::create_dir_all(&path);
+    path.push("write_protection.json");
+    path
+}
+
+fn load_rules() -> HashSet<ProtectedKey> {
+    let path = rules_file_path();
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_rules(rules: &HashSet<ProtectedKey>) {
+    let path = rules_file_path();
+    if let Ok(json) = serde_json::to_string_pretty(rules) {
+        let _ = fs::write(&path, json);
+    }
+}
+
 pub struct WriteProtection {
     protected: Mutex<HashSet<ProtectedKey>>,
 }
 
 impl WriteProtection {
     pub fn new() -> Self {
+        let rules = load_rules();
         Self {
-            protected: Mutex::new(HashSet::new()),
+            protected: Mutex::new(rules),
         }
     }
 
@@ -34,11 +64,15 @@ impl WriteProtection {
     }
 
     pub fn add_protection(&self, key: ProtectedKey) {
-        self.protected.lock().unwrap().insert(key);
+        let mut protected = self.protected.lock().unwrap();
+        protected.insert(key);
+        save_rules(&protected);
     }
 
     pub fn remove_protection(&self, key: ProtectedKey) {
-        self.protected.lock().unwrap().remove(&key);
+        let mut protected = self.protected.lock().unwrap();
+        protected.remove(&key);
+        save_rules(&protected);
     }
 
     pub fn get_all(&self) -> Vec<ProtectedKey> {

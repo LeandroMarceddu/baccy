@@ -6,9 +6,11 @@ use baccy_transport::network_stats::StatsCollector;
 use baccy_transport::packet_log::{LoggedTransport, PacketLog};
 use baccy_transport::{BacnetIpTransport, BacnetMstpTransport, BbmdConfig, BbmdTransport, Transport};
 use crate::commands::write_prefs::WriteProtection;
+use baccy_transport::bbmd::ForeignDeviceEntry;
+use baccy_transport::router::RouterTransport;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Application settings for persistence
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -29,6 +31,29 @@ pub struct AppState {
     pub stats: Arc<StatsCollector>,
     pub settings: Arc<Mutex<AppSettings>>,
     pub write_protection: WriteProtection,
+    pub router: Arc<Mutex<RouterTransport>>,
+    pub bbmd_state: Arc<Mutex<BbmdState>>,
+}
+
+/// Tracks BBMD state observable from the Tauri layer
+pub struct BbmdState {
+    pub enabled: bool,
+    pub bbmd_address: Option<std::net::SocketAddr>,
+    pub last_registration: Option<Instant>,
+    pub ttl: Option<u32>,
+    pub fdt_entries: Vec<ForeignDeviceEntry>,
+}
+
+impl BbmdState {
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            bbmd_address: None,
+            last_registration: None,
+            ttl: None,
+            fdt_entries: Vec::new(),
+        }
+    }
 }
 
 impl AppState {
@@ -44,6 +69,8 @@ impl AppState {
             stats: Arc::new(StatsCollector::new()),
             settings: Arc::new(Mutex::new(AppSettings::default())),
             write_protection: WriteProtection::new(),
+            router: Arc::new(Mutex::new(RouterTransport::new())),
+            bbmd_state: Arc::new(Mutex::new(BbmdState::new())),
         }
     }
 

@@ -110,6 +110,49 @@ impl DeviceManager {
         self.devices.get(&id)
     }
 
+    /// Discover devices within a specific instance range
+    ///
+    /// Sends a Who-Is with a device instance range and collects I_Am responses.
+    ///
+    /// # Arguments
+    /// * `low` - Low end of the instance range (inclusive)
+    /// * `high` - High end of the instance range (inclusive)
+    pub fn discover_devices_range(&mut self, low: u32, high: u32) -> Result<(), AppError> {
+        if let Err(e) = self.service.who_is_range(low, high) {
+            tracing::error!(
+                low, high,
+                error = %e,
+                "Failed to send Who-Is range broadcast"
+            );
+            return Err(e.into());
+        }
+
+        let discovery_timeout = Duration::from_secs(5);
+        let start_time = std::time::Instant::now();
+        let mut device_count = 0;
+
+        while start_time.elapsed() < discovery_timeout {
+            let receive_timeout = Duration::from_millis(100);
+            match self.service.receive_iam(receive_timeout) {
+                Ok(device) => {
+                    self.update_device(device);
+                    device_count += 1;
+                }
+                Err(baccy_protocol::ProtocolError::Timeout) => continue,
+                Err(baccy_protocol::ProtocolError::TransportError(
+                    baccy_transport::TransportError::Timeout,
+                )) => continue,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Error receiving I_Am during range discovery");
+                    continue;
+                }
+            }
+        }
+
+        tracing::info!(device_count, low, high, "Range discovery completed");
+        Ok(())
+    }
+
     /// Update or insert a device
     ///
     /// If a device with the same instance number already exists, it will be

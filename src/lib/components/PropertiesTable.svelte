@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { selectedDevice, selectedObject, properties, comparisonItems, showComparison } from "$lib/stores";
+  import ScheduleViewer from "./ScheduleViewer.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Badge } from "$lib/components/ui/badge";
@@ -240,11 +241,17 @@
       <p class="p-4 text-center text-sm text-muted-foreground">
         Select an object to view its properties
       </p>
-    {:else if $properties.length === 0 && !loading}
-      <p class="p-4 text-center text-sm text-muted-foreground">
-        No properties found
-      </p>
     {:else}
+      {#if $selectedObject.object_type === "SCHEDULE" || $selectedObject.object_type === "CALENDAR"}
+        <div class="p-4">
+          <ScheduleViewer />
+        </div>
+      {/if}
+      {#if $properties.length === 0 && !loading}
+        <p class="p-4 text-center text-sm text-muted-foreground">
+          No properties found
+        </p>
+      {:else}
       <Table.Root>
         <Table.Header>
           <Table.Row>
@@ -315,6 +322,7 @@
           {/each}
         </Table.Body>
       </Table.Root>
+    {/if}
     {/if}
   </div>
 </div>

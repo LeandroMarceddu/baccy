@@ -83,6 +83,38 @@ export interface DeviceHealth {
   last_failure: number | null;
 }
 
+export interface ScheduleProperty {
+  id: string;
+  name: string;
+  value: string;
+  readable: boolean;
+}
+
+export interface BbmdStatus {
+  enabled: boolean;
+  registered_to: string | null;
+  last_registration_ms: number | null;
+  ttl: number | null;
+  fdt_entries: FdtEntry[];
+}
+
+export interface FdtEntry {
+  address: string;
+  time_to_live: number;
+  remaining_seconds: number;
+}
+
+export interface RouteInfo {
+  network: number;
+  next_hop: string;
+  interface: number;
+}
+
+export interface InterfaceInfo {
+  name: string;
+  network: number;
+}
+
 export const deviceHealth = writable<Record<number, DeviceHealth>>({});
 
 export const comparisonItems = writable<ComparisonItem[]>([]);
