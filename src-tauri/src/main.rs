@@ -53,6 +53,7 @@ fn main() {
             commands::trending::toggle_trending_visibility,
             commands::trending::poll_trending,
             commands::trending::export_trending_csv,
+            commands::trending::export_trending_parquet,
             commands::search::who_has_by_name,
             commands::search::who_has_by_object,
             commands::cov::subscribe_cov,
@@ -90,6 +91,11 @@ fn main() {
             // Schedule/Calendar commands
             commands::schedule::read_schedule_data,
             commands::schedule::read_calendar_data,
+            // File Access & Private Transfer commands
+            commands::services::atomic_read_file,
+            commands::services::atomic_write_file,
+            commands::services::send_unconfirmed_private_transfer,
+            commands::services::read_trend_log_buffer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

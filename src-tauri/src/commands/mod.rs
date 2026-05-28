@@ -14,5 +14,6 @@ pub mod bbmd;
 pub mod router;
 pub mod schedule;
 pub mod search;
+pub mod services;
 pub mod trending;
 pub mod write_prefs;

@@ -69,7 +69,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "Baccy v${{ github.ref_name }}"
+          releaseName: "Baccy ${{ github.ref_name }}"
           releaseBody: ""
           releaseDraft: true
           prerelease: false

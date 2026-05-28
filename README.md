@@ -35,6 +35,9 @@ A cross-platform BACnet browser and testing tool built with Tauri, Rust, and Sve
 - **WriteProperty** — Write with priority array support (1-16)
 - **WritePropertyMultiple** — Atomic write to multiple objects
 - **Property Value Parsing** — Real, Integer, Unsigned, Boolean, String, Enumerated, BitString, ObjectIdentifier
+- **AtomicReadFile** — Read file objects (binary data as hex); key for firmware/trendlog download
+- **AtomicWriteFile** — Write binary data to file objects
+- **UnconfirmedPrivateTransfer** — Vendor-specific broadcast messaging (vendor ID + service number + optional data)
 
 ### Change of Value (COV)
 - **SubscribeCOV** — Subscribe to object-level change notifications
@@ -47,6 +50,7 @@ A cross-platform BACnet browser and testing tool built with Tauri, Rust, and Sve
 - **Multi-Property Overlay** — Trend multiple properties simultaneously with color coding
 - **Visibility Toggle** — Show/hide individual trend lines
 - **CSV Export** — Export trend data to CSV files
+- **Parquet Export** — Export trend data to Apache Parquet format
 
 ### Alarming & Events
 - **Event Notification Parsing** — Decodes unconfirmed event notifications (initiating device, event object, timestamp, priority, notify type)

@@ -3866,6 +3866,658 @@ impl BacnetService {
             continue;
         }
     }
+
+    // ==========================================================================
+    // Phase A — File Services (AtomicReadFile / AtomicWriteFile)
+    // ==========================================================================
+
+    /// Send AtomicReadFile request and return raw file data + end-of-file flag.
+    ///
+    /// Manually decodes the BER-encoded response since bacnet-rs doesn't
+    /// implement `decode()` on `AtomicReadFileResponse`.
+    pub fn atomic_read_file(
+        &self,
+        device: DeviceId,
+        file_object: ObjectId,
+        start_position: i32,
+        octet_count: u32,
+    ) -> Result<AtomicReadFileResult, ProtocolError> {
+        self.with_throttle(device, || {
+            use bacnet_rs::service::AtomicReadFileRequest;
+            use type_conversion::to_bacnet_object_type;
+
+            let address = self.get_device_address(device)?;
+
+            let (invoke_id, max_apdu, seg_accepted) =
+                self.get_device_state_mut(device, |state| {
+                    let id = state.next_invoke_id();
+                    let seg = matches!(
+                        state.seg_supported,
+                        bacnet_rs::object::Segmentation::Both
+                            | bacnet_rs::object::Segmentation::Receive
+                    );
+                    (id, state.max_apdu, seg)
+                })?;
+
+            let bacnet_obj_id = ObjectIdentifier::new(
+                to_bacnet_object_type(file_object.object_type),
+                file_object.instance,
+            );
+
+            let request = AtomicReadFileRequest::new_stream_access(
+                bacnet_obj_id,
+                start_position,
+                octet_count,
+            );
+
+            let mut service_data = Vec::new();
+            request.encode(&mut service_data).map_err(|e| {
+                ProtocolError::EncodingError(format!("Failed to encode AtomicReadFile: {}", e))
+            })?;
+
+            send_confirmed_request(
+                &*self.transport,
+                &address,
+                ConfirmedServiceChoice::AtomicReadFile,
+                &service_data,
+                invoke_id,
+                seg_accepted,
+                max_apdu,
+                &self.stats,
+            )?;
+
+            let (response_data, _service_choice) = receive_response(
+                &*self.transport,
+                &address,
+                invoke_id,
+                ConfirmedServiceChoice::AtomicReadFile,
+                self.request_timeout,
+                &self.stats,
+            )?;
+
+            parse_atomic_read_file_response(&response_data)
+        })
+    }
+
+    /// Send AtomicWriteFile request and return the new file start position.
+    ///
+    /// The BACnet AtomicWriteFile response is simply `file_start_position [0] SIGNED32`.
+    pub fn atomic_write_file(
+        &self,
+        device: DeviceId,
+        file_object: ObjectId,
+        start_position: i32,
+        data: Vec<u8>,
+    ) -> Result<i32, ProtocolError> {
+        self.with_throttle(device, || {
+            use bacnet_rs::service::AtomicWriteFileRequest;
+            use type_conversion::to_bacnet_object_type;
+
+            let address = self.get_device_address(device)?;
+
+            let (invoke_id, max_apdu, seg_accepted) =
+                self.get_device_state_mut(device, |state| {
+                    let id = state.next_invoke_id();
+                    let seg = matches!(
+                        state.seg_supported,
+                        bacnet_rs::object::Segmentation::Both
+                            | bacnet_rs::object::Segmentation::Receive
+                    );
+                    (id, state.max_apdu, seg)
+                })?;
+
+            let bacnet_obj_id = ObjectIdentifier::new(
+                to_bacnet_object_type(file_object.object_type),
+                file_object.instance,
+            );
+
+            let request = AtomicWriteFileRequest::new_stream_access(
+                bacnet_obj_id,
+                start_position,
+                data,
+            );
+
+            let mut service_data = Vec::new();
+            request.encode(&mut service_data).map_err(|e| {
+                ProtocolError::EncodingError(format!("Failed to encode AtomicWriteFile: {}", e))
+            })?;
+
+            send_confirmed_request(
+                &*self.transport,
+                &address,
+                ConfirmedServiceChoice::AtomicWriteFile,
+                &service_data,
+                invoke_id,
+                seg_accepted,
+                max_apdu,
+                &self.stats,
+            )?;
+
+            let (response_data, _service_choice) = receive_response(
+                &*self.transport,
+                &address,
+                invoke_id,
+                ConfirmedServiceChoice::AtomicWriteFile,
+                self.request_timeout,
+                &self.stats,
+            )?;
+
+            parse_atomic_write_file_response(&response_data)
+        })
+    }
+
+    // ==========================================================================
+    // Phase A — Vendor-specific Private Transfer (A7)
+    // ==========================================================================
+
+    /// Send an UnconfirmedPrivateTransfer message.
+    ///
+    /// Encodes vendor_id [0] + service_number [1] + optional service_data [2]
+    /// using the standard BACnet context-tag encoding, then fires it as an
+    /// unconfirmed request. No response is expected.
+    pub fn send_unconfirmed_private_transfer(
+        &self,
+        vendor_id: u16,
+        service_number: u32,
+        service_data: Option<Vec<u8>>,
+    ) -> Result<(), ProtocolError> {
+        use bacnet_rs::app::Apdu;
+        use bacnet_rs::encoding::encode_context_unsigned;
+        use bacnet_rs::network::Npdu;
+        use bacnet_rs::encoding::advanced::context::{encode_opening_tag, encode_closing_tag};
+
+        let mut payload = Vec::new();
+
+        // vendorID [0] Unsigned16
+        payload.extend_from_slice(&encode_context_unsigned(vendor_id as u32, 0).map_err(|e| {
+            ProtocolError::EncodingError(format!("Failed to encode vendor_id: {}", e))
+        })?);
+
+        // serviceNumber [1] Unsigned32
+        payload.extend_from_slice(&encode_context_unsigned(service_number, 1).map_err(|e| {
+            ProtocolError::EncodingError(format!("Failed to encode service_number: {}", e))
+        })?);
+
+        // serviceParameters [2] OCTET STRING — optional
+        if let Some(data) = service_data {
+            encode_opening_tag(&mut payload, 2).map_err(|e| {
+                ProtocolError::EncodingError(format!("Failed to encode opening tag 2: {}", e))
+            })?;
+            payload.extend_from_slice(&data);
+            encode_closing_tag(&mut payload, 2).map_err(|e| {
+                ProtocolError::EncodingError(format!("Failed to encode closing tag 2: {}", e))
+            })?;
+        }
+
+        let apdu = Apdu::UnconfirmedRequest {
+            service_choice: UnconfirmedServiceChoice::UnconfirmedPrivateTransfer,
+            service_data: payload,
+        };
+
+        let mut message = Npdu::global_broadcast().encode();
+        message.extend_from_slice(&apdu.encode());
+
+        self.stats.record_send(message.len());
+        if self.transport.broadcast(&message).is_err() {
+            self.stats.record_error();
+        }
+        Ok(())
+    }
+
+    // ==========================================================================
+    // Phase A — TrendLog Buffer Download
+    // ==========================================================================
+
+    /// Read the LogBuffer property from a TrendLog object and parse the records.
+    ///
+    /// The LogBuffer property is a `BACnetARRAY[N] of LogRecord` — the response
+    /// bytes are manually parsed since bacnet-rs has no `decode()` for arrays
+    /// of SEQUENCE types.
+    pub fn read_trend_log_buffer(
+        &self,
+        device: DeviceId,
+        object: ObjectId,
+    ) -> Result<Vec<TrendLogRecord>, ProtocolError> {
+        self.with_throttle(device, || {
+            use bacnet_rs::object::ObjectIdentifier;
+            use bacnet_rs::service::ReadPropertyRequest;
+            use type_conversion::{to_bacnet_object_type, to_bacnet_property_id};
+
+            let address = self.get_device_address(device)?;
+
+            let (invoke_id, max_apdu, seg_accepted) =
+                self.get_device_state_mut(device, |state| {
+                    let id = state.next_invoke_id();
+                    let seg = matches!(
+                        state.seg_supported,
+                        bacnet_rs::object::Segmentation::Both
+                            | bacnet_rs::object::Segmentation::Receive
+                    );
+                    (id, state.max_apdu, seg)
+                })?;
+
+            let bacnet_obj_id = ObjectIdentifier::new(
+                to_bacnet_object_type(object.object_type),
+                object.instance,
+            );
+            let bacnet_prop_id = to_bacnet_property_id(PropertyId::LogBuffer);
+
+            let request = ReadPropertyRequest::new(bacnet_obj_id, bacnet_prop_id);
+            let mut service_data = Vec::new();
+            request.encode(&mut service_data).map_err(|e| {
+                ProtocolError::EncodingError(format!(
+                    "Failed to encode ReadProperty for LogBuffer: {}",
+                    e
+                ))
+            })?;
+
+            send_confirmed_request(
+                &*self.transport,
+                &address,
+                ConfirmedServiceChoice::ReadProperty,
+                &service_data,
+                invoke_id,
+                seg_accepted,
+                max_apdu,
+                &self.stats,
+            )?;
+
+            let (response_data, _) = receive_response(
+                &*self.transport,
+                &address,
+                invoke_id,
+                ConfirmedServiceChoice::ReadProperty,
+                self.request_timeout,
+                &self.stats,
+            )?;
+
+            // Skip object_id (context tag 0) + property_id (context tag 1)
+            // Then find context tag 3 opening which wraps the property value.
+            let mut pos = 0usize;
+            // Skip context tag 0 (object_id: tag + 4 bytes)
+            if pos + 5 < response_data.len() && (response_data[pos] & 0xF0) == 0x00 {
+                let len = (response_data[pos] & 0x0F) as usize;
+                pos += 1 + len;
+            }
+            // Skip context tag 1 (property_id)
+            if pos < response_data.len() && (response_data[pos] & 0xF0) == 0x10 {
+                let len = (response_data[pos] & 0x0F) as usize;
+                pos += 1 + len;
+            }
+            // Skip context tag 2 (array_index, optional)
+            if pos < response_data.len() && (response_data[pos] & 0xF0) == 0x20 {
+                let len = (response_data[pos] & 0x0F) as usize;
+                pos += 1 + len;
+            }
+
+            // Expect context tag 3 opening (0x3E)
+            if pos >= response_data.len() || response_data[pos] != 0x3E {
+                return Err(ProtocolError::DecodingError(
+                    "Missing LogBuffer opening tag 3".into(),
+                ));
+            }
+            pos += 1;
+
+            // Now parse array elements. Each element is wrapped in opening/closing tag 0.
+            let mut records = Vec::new();
+            while pos < response_data.len() && response_data[pos] != 0x3F {
+                if response_data[pos] != 0x0E {
+                    return Err(ProtocolError::DecodingError(format!(
+                        "Expected opening tag 0 at position {}",
+                        pos
+                    )));
+                }
+                pos += 1;
+                let element_start = pos;
+                // Find closing tag 0 (0x0F)
+                while pos < response_data.len() && response_data[pos] != 0x0F {
+                    pos += 1;
+                }
+                if pos >= response_data.len() {
+                    return Err(ProtocolError::DecodingError(
+                        "Missing closing tag 0 in LogBuffer".into(),
+                    ));
+                }
+                let element_data = &response_data[element_start..pos];
+                pos += 1; // skip closing tag 0
+
+                match parse_log_record(element_data) {
+                    Ok(record) => records.push(record),
+                Err(e) => {
+                    eprintln!("Skipping unparseable LogRecord: {}", e);
+                }
+                }
+            }
+
+            Ok(records)
+        })
+    }
+}
+
+/// A single TrendLog record parsed from a TrendLog object's LogBuffer.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrendLogRecord {
+    /// Timestamp: either a datetime string, a sequence number, or a raw hex if unknown.
+    pub timestamp: String,
+    /// Logged value as a display string.
+    pub value: String,
+    /// Status flags (optional, hex string).
+    pub status_flags: Option<String>,
+}
+
+/// Parss e LogRecord SEQUENCE from raw BER bytes (between the element's
+/// opening/closing tag 0).
+///
+/// LogRecord ::= SEQUENCE {
+///   timestamp   [0] BACnetTimeStamp,
+///   log_datum   [1] CHOICE { log_status [0], real_value [1], ... },
+///   status_flag [2] BIT STRING OPTIONAL,
+///   ...
+/// }
+fn parse_log_record(data: &[u8]) -> Result<TrendLogRecord, ProtocolError> {
+    use bacnet_rs::encoding::decode_context_unsigned;
+
+    let mut pos = 0usize;
+
+    // --- Parse timestamp [0] BACnetTimeStamp ---
+    // BACnetTimeStamp ::= CHOICE { time [0] Time, sequenceNumber [1] Unsigned, datetime [2] DateTime }
+    // It's wrapped in context tag 0 (opening tag), then the CHOICE value, then closing tag 0.
+    let timestamp = if pos + 3 >= data.len() {
+        "invalid".to_string()
+    } else if data[pos] != 0x0E {
+        // Not an opening tag 0 — maybe optional timestamp?
+        "missing".to_string()
+    } else {
+        pos += 1; // skip opening tag 0
+        let ts_choice_start = pos;
+        // Find closing tag 0
+        while pos < data.len() && data[pos] != 0x0F {
+            pos += 1;
+        }
+        let ts_choice_data = &data[ts_choice_start..pos];
+        pos += 1; // skip closing tag 0
+
+        // Determine the CHOICE variant by looking at the first context tag
+        if ts_choice_data.is_empty() {
+            "empty".to_string()
+        } else if ts_choice_data[0] == 0x19 {
+            // [1] Unsigned32 (sequence number)
+            if let Ok((val, _)) = decode_context_unsigned(ts_choice_data, 1) {
+                format!("seq:{}", val)
+            } else {
+                format!("seq:{:02x?}", ts_choice_data)
+            }
+        } else if ts_choice_data[0] == 0x29 {
+            // [2] BACnetDateTime (opening tag 2 + date + time + closing tag 2)
+            // Structure: opening tag 2, date (4 bytes), time (4 bytes), closing tag 2
+            if ts_choice_data.len() >= 12 && ts_choice_data[0] == 0x2E
+                && ts_choice_data[ts_choice_data.len() - 1] == 0x2F
+            {
+                let dt_data = &ts_choice_data[1..ts_choice_data.len() - 1];
+                if dt_data.len() >= 8 {
+                    let year = (dt_data[0] as u16) << 8 | dt_data[1] as u16;
+                    let month = dt_data[2];
+                    let day = dt_data[3];
+                    let hour = dt_data[4];
+                    let minute = dt_data[5];
+                    let second = dt_data[6];
+                    format!(
+                        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                        if year == 255 { 0 } else { 1900 + year },
+                        if month == 255 { 0 } else { month },
+                        if day == 255 { 0 } else { day },
+                        if hour == 255 { 0 } else { hour },
+                        if minute == 255 { 0 } else { minute },
+                        if second == 255 { 0 } else { second }
+                    )
+                } else {
+                    format!("dt:{:02x?}", ts_choice_data)
+                }
+            } else {
+                format!("dt:{:02x?}", ts_choice_data)
+            }
+        } else {
+            format!("ts:{:02x?}", ts_choice_data)
+        }
+    };
+
+    // --- Parse log_datum [1] ---
+    // This is a CHOICE wrapped in context tag 1 (opening). The specific variant
+    // is determined by the inner context tag.
+    let value = if pos + 2 >= data.len() {
+        "missing".to_string()
+    } else if data[pos] != 0x1E {
+        // Not opening tag 1 — datum may be missing or at wrong position
+        format!("raw:{:02x?}", &data[pos..])
+    } else {
+        pos += 1; // skip opening tag 1
+        let datum_start = pos;
+        while pos < data.len() && data[pos] != 0x1F {
+            pos += 1;
+        }
+        let datum_data = &data[datum_start..pos];
+        pos += 1; // skip closing tag 1
+
+        if datum_data.is_empty() {
+            "empty".to_string()
+        } else {
+            let tag_byte = datum_data[0];
+            let inner = &datum_data[1..];
+            match tag_byte {
+                0x31 | 0x32 | 0x33 | 0x34 => {
+                    // application tag: Real (0x44/0x45), etc.
+                    // Just try to parse as a real
+                    if let Ok(val) = crate::type_conversion::convert_bacnet_property_value(
+                        &bacnet_rs::property::PropertyValue::Real(
+                            f32::from_be_bytes(
+                                inner
+                                    .get(..4)
+                                    .and_then(|b| b.try_into().ok())
+                                    .unwrap_or([0; 4]),
+                            ),
+                        ),
+                    ) {
+                        match val {
+                            PropertyValue::Real(f) => format!("{:.2}", f),
+                            PropertyValue::Integer(i) => i.to_string(),
+                            PropertyValue::Unsigned(u) => u.to_string(),
+                            PropertyValue::Enumerated(e) => e.to_string(),
+                            PropertyValue::String(s) => s,
+                            _ => format!("{:02x?}", datum_data),
+                        }
+                    } else {
+                        format!("{:02x?}", datum_data)
+                    }
+                }
+                0x0E => {
+                    // [0] — log_status (BIT STRING wrapped in context tag 0)
+                    // Try to decode as BitString
+                    if inner.len() >= 2 {
+                        let bit_count = inner[0] as usize;
+                        let bytes = &inner[1..];
+                        let bits: Vec<bool> = (0..bit_count.min(bytes.len() * 8))
+                            .map(|i| (bytes[i / 8] >> (7 - (i % 8))) & 1 == 1)
+                            .collect();
+                        let status: String = bits.iter().map(|b| if *b { '1' } else { '0' }).collect();
+                        format!("status:{}", status)
+                    } else {
+                        format!("status:{:02x?}", inner)
+                    }
+                }
+                0x1E => {
+                    // [1] — real_value (wrapped in opening/closing tag 1)
+                    let sub_start = 1;
+                    let sub_end = inner.len().saturating_sub(1);
+                    if sub_end > sub_start {
+                        let real_bytes = &inner[sub_start..sub_end];
+                        if real_bytes.len() >= 4 {
+                            let f = f32::from_be_bytes([
+                                real_bytes[0], real_bytes[1], real_bytes[2], real_bytes[3],
+                            ]);
+                            format!("{:.2}", f)
+                        } else {
+                            format!("{:02x?}", datum_data)
+                        }
+                    } else {
+                        format!("{:02x?}", datum_data)
+                    }
+                }
+                0x2E => {
+                    // [2] — analog_value (opening/closing tag 2)
+                    // Similar processing...
+                    let sub_start = 1;
+                    let sub_end = inner.len().saturating_sub(1);
+                    if sub_end > sub_start {
+                        let real_bytes = &inner[sub_start..sub_end];
+                        if real_bytes.len() >= 4 {
+                            let f = f32::from_be_bytes([
+                                real_bytes[0], real_bytes[1], real_bytes[2], real_bytes[3],
+                            ]);
+                            format!("{:.2}", f)
+                        } else {
+                            format!("{:02x?}", datum_data)
+                        }
+                    } else {
+                        format!("{:02x?}", datum_data)
+                    }
+                }
+                0x6E => {
+                    // [6] — binary_value or enumerated inside opening/closing tag 6
+                    let sub_start = 1;
+                    let sub_end = inner.len().saturating_sub(1);
+                    if sub_end > sub_start {
+                        let val_bytes = &inner[sub_start..sub_end];
+                        if let Ok((enum_val, _)) = decode_context_unsigned(val_bytes, 0) {
+                            format!("enum:{}", enum_val)
+                        } else {
+                            format!("{:02x?}", datum_data)
+                        }
+                    } else {
+                        format!("{:02x?}", datum_data)
+                    }
+                }
+                _ => format!("{:02x?}", datum_data),
+            }
+        }
+    };
+
+    // --- Parse optional status_flags [2] ---
+    let status_flags = if pos + 3 >= data.len() || data[pos] != 0x2E {
+        None
+    } else {
+        pos += 1;
+        let sf_start = pos;
+        while pos < data.len() && data[pos] != 0x2F {
+            pos += 1;
+        }
+        let sf_data = &data[sf_start..pos];
+        Some(format!("{:02x?}", sf_data))
+    };
+
+    Ok(TrendLogRecord {
+        timestamp,
+        value,
+        status_flags,
+    })
+}
+
+/// Result of an AtomicReadFile operation.
+#[derive(Debug, Clone)]
+pub struct AtomicReadFileResult {
+    /// True when the end of the file has been reached.
+    pub end_of_file: bool,
+    /// File position after the read (returned by the device).
+    pub file_start_position: i32,
+    /// The raw octets read from the file.
+    pub file_data: Vec<u8>,
+}
+
+/// Parse an AtomicReadFile response from raw BER-encoded service data.
+///
+/// Layout (stream access):
+///   end_of_file [0] BOOLEAN (context-tagged opening tag + value + closing tag)
+///   access_method [1] (opening tag)
+///     file_start_position [0] SIGNED32
+///     file_data [1] OCTET STRING (opening/closing tag pair)
+///   access_method closing [1]
+fn parse_atomic_read_file_response(data: &[u8]) -> Result<AtomicReadFileResult, ProtocolError> {
+    let mut pos = 0;
+
+    // end_of_file [0] — encoded as opening tag (0x0E), value byte, closing tag (0x0F)
+    if pos >= data.len() || data[pos] != 0x0E {
+        return Err(ProtocolError::DecodingError("Missing end_of_file opening tag".into()));
+    }
+    pos += 1;
+    let end_of_file = if data[pos] == 0x01 { true } else { false };
+    pos += 1;
+    if pos >= data.len() || data[pos] != 0x0F {
+        return Err(ProtocolError::DecodingError("Missing end_of_file closing tag".into()));
+    }
+    pos += 1;
+
+    // access_method [1] opening tag
+    if pos >= data.len() || data[pos] != 0x1E {
+        return Err(ProtocolError::DecodingError("Missing access_method opening tag".into()));
+    }
+    pos += 1;
+
+    // file_start_position [0] SIGNED32 — context tag 0 with length 4
+    // BACnet SIGNED32 is encoded as context-tagged 4-byte signed value
+    if pos + 5 > data.len() || data[pos] != 0x09 {
+        return Err(ProtocolError::DecodingError("Missing file_start_position tag".into()));
+    }
+    pos += 1;
+    let pos_bytes: [u8; 4] = [
+        data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
+    ];
+    let file_start_position = i32::from_be_bytes(pos_bytes);
+    pos += 4;
+
+    // file_data [1] — opening tag
+    if pos >= data.len() || data[pos] != 0x1E {
+        return Err(ProtocolError::DecodingError("Missing file_data opening tag".into()));
+    }
+    pos += 1;
+
+    // Read bytes until we hit closing tag 1 (0x1F)
+    let file_data_start = pos;
+    while pos < data.len() && data[pos] != 0x1F {
+        pos += 1;
+    }
+    let file_data = data[file_data_start..pos].to_vec();
+
+    if pos >= data.len() {
+        return Err(ProtocolError::DecodingError("Missing file_data closing tag".into()));
+    }
+    pos += 1; // skip closing tag
+
+    // access_method closing tag [1]
+    if pos >= data.len() || data[pos] != 0x1F {
+        return Err(ProtocolError::DecodingError("Missing access_method closing tag".into()));
+    }
+
+    Ok(AtomicReadFileResult {
+        end_of_file,
+        file_start_position,
+        file_data,
+    })
+}
+
+/// Parse an AtomicWriteFile response — simply a `file_start_position [0] SIGNED32`.
+fn parse_atomic_write_file_response(data: &[u8]) -> Result<i32, ProtocolError> {
+    if data.len() < 5 {
+        return Err(ProtocolError::DecodingError(
+            format!("AtomicWriteFile response too short: {} bytes", data.len()),
+        ));
+    }
+    // context tag 0, length 4, then 4 bytes signed
+    if data[0] != 0x09 {
+        return Err(ProtocolError::DecodingError(
+            format!("Expected context tag 0 with length 4, got {:#04x}", data[0]),
+        ));
+    }
+    let bytes: [u8; 4] = [data[1], data[2], data[3], data[4]];
+    Ok(i32::from_be_bytes(bytes))
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { selectedDevice, selectedObject, properties, comparisonItems, showComparison } from "$lib/stores";
   import ScheduleViewer from "./ScheduleViewer.svelte";
+  import TrendLogViewer from "./TrendLogViewer.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Badge } from "$lib/components/ui/badge";
@@ -245,6 +246,11 @@
       {#if $selectedObject.object_type === "SCHEDULE" || $selectedObject.object_type === "CALENDAR"}
         <div class="p-4">
           <ScheduleViewer />
+        </div>
+      {/if}
+      {#if $selectedObject.object_type === "Trend Log"}
+        <div class="p-4 border-b">
+          <TrendLogViewer />
         </div>
       {/if}
       {#if $properties.length === 0 && !loading}
